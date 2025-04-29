@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -78,10 +79,20 @@ export default function ScheduleEmailPage() {
            form.reset();
        }
     } catch (error: any) {
-       console.error("Error sending email:", error);
+       console.error("Detailed error sending email:", error); // Log the full error object
+       // Attempt to get a more specific message
+       let errorMessage = "An unexpected error occurred while sending the email.";
+       if (error instanceof Error) {
+          errorMessage = error.message || errorMessage;
+       } else if (typeof error === 'string') {
+          errorMessage = error;
+       } else if (error?.details) {
+           // Handle potential structured errors if the backend sends them
+           errorMessage = error.details;
+       }
        toast({
          title: "Error",
-         description: error.message || "Failed to send email. Please try again.",
+         description: errorMessage,
          variant: "destructive",
        });
     } finally {

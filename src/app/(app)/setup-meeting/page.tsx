@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -119,10 +120,20 @@ export default function SetupMeetingPage() {
         variant: response.inviteSent || !response.confirmationMessage.toLowerCase().includes("failed") ? "default" : "destructive",
       });
     } catch (error: any) {
-      console.error("Error setting up meeting:", error);
+      console.error("Detailed error setting up meeting:", error); // Log the full error object
+      // Attempt to get a more specific message
+      let errorMessage = "An unexpected error occurred while setting up the meeting.";
+      if (error instanceof Error) {
+         errorMessage = error.message || errorMessage;
+      } else if (typeof error === 'string') {
+         errorMessage = error;
+      } else if (error?.details) {
+          // Handle potential structured errors if the backend sends them
+          errorMessage = error.details;
+      }
       toast({
         title: "Error",
-        description: error.message || "Failed to set up meeting. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {

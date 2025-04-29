@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -94,8 +95,17 @@ export default function BookHotelPage() {
         description: response.message, // Use message from response
       });
     } catch (error: any) {
-      console.error("Error booking hotel:", error);
-      const errorMessage = error.message || "Failed to book hotel. Please try again.";
+      console.error("Detailed error booking hotel:", error); // Log the full error object
+       // Attempt to get a more specific message
+       let errorMessage = "An unexpected error occurred while booking the hotel.";
+       if (error instanceof Error) {
+          errorMessage = error.message || errorMessage;
+       } else if (typeof error === 'string') {
+          errorMessage = error;
+       } else if (error?.details) {
+           // Handle potential structured errors if the backend sends them
+           errorMessage = error.details;
+       }
       setError(errorMessage); // Set error state
       toast({
         title: "Hotel Booking Failed",

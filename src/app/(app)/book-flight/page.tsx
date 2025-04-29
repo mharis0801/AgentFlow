@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -85,8 +86,17 @@ export default function BookFlightPage() {
         description: response.bookingMessage,
       });
     } catch (error: any) {
-      console.error("Error booking flight:", error);
-      const errorMessage = error.message || "Failed to book flight. Please try again.";
+      console.error("Detailed error booking flight:", error); // Log the full error object
+      // Attempt to get a more specific message
+      let errorMessage = "An unexpected error occurred while booking the flight.";
+      if (error instanceof Error) {
+         errorMessage = error.message || errorMessage;
+      } else if (typeof error === 'string') {
+         errorMessage = error;
+      } else if (error?.details) {
+          // Handle potential structured errors if the backend sends them
+          errorMessage = error.details;
+      }
       setError(errorMessage); // Set error state
       toast({
         title: "Flight Booking Failed",

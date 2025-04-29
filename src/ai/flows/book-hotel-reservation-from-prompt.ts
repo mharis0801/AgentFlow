@@ -26,14 +26,19 @@ export async function bookHotelReservationFromPrompt(input: BookHotelReservation
   return bookHotelReservationFromPromptFlow(input);
 }
 
-// Define the expected output schema for the LLM, based on the HotelSearchCriteria
-const HotelSearchCriteriaSchema = z.object({
+// Define the schema for the data we need the LLM to extract.
+// Removed `.positive()` from numberOfGuests to avoid API schema issues. Validation happens later.
+const LLMExtractedHotelSearchCriteriaSchema = z.object({
     city: z.string().describe('The city where the hotel is located.'),
     checkInDate: z.string().date().describe('The check-in date (YYYY-MM-DD).'),
     checkOutDate: z.string().date().describe('The check-out date (YYYY-MM-DD).'),
-    numberOfGuests: z.number().int().positive().describe('The number of guests (must be a positive integer).'),
+    numberOfGuests: z.number().int().describe('The number of guests (must be an integer).'), // Removed .positive() here
 });
 
+// Define the final schema with all validations, used after LLM extraction
+const FinalHotelSearchCriteriaSchema = LLMExtractedHotelSearchCriteriaSchema.extend({
+    numberOfGuests: z.number().int().positive().describe('The number of guests (must be a positive integer).'), // Keep positive validation here
+});
 
 const bookHotelPrompt = ai.definePrompt({
   name: 'bookHotelPrompt',
@@ -41,8 +46,8 @@ const bookHotelPrompt = ai.definePrompt({
     schema: BookHotelReservationFromPromptInputSchema,
   },
   output: {
-    // The prompt's direct output should be the structured search criteria.
-    schema: HotelSearchCriteriaSchema,
+    // The prompt's direct output should be the structured search criteria based on the simplified schema.
+    schema: LLMExtractedHotelSearchCriteriaSchema,
   },
   prompt: `You are a hotel booking assistant. Your task is to extract the hotel search criteria from the following user prompt.
 
@@ -84,21 +89,21 @@ async (input) => {
      const city = extractedCriteria?.city?.toLowerCase();
      const checkIn = extractedCriteria?.checkInDate?.toLowerCase();
      const checkOut = extractedCriteria?.checkOutDate?.toLowerCase();
-     const guests = extractedCriteria?.numberOfGuests;
+     const guests = extractedCriteria?.numberOfGuests; // Guests could be 0 initially
 
      if (city?.includes('issue') || city?.includes('invalid') || city?.includes('fail')) {
        throw new Error(`AI Processing Error: ${extractedCriteria.city}`);
      }
-     // Check for potentially invalid dates/guests as per prompt instructions
-     if (checkIn?.includes('invalid') || checkOut?.includes('invalid') || guests === 0) {
-        throw new Error('AI could not extract valid dates or number of guests.');
+     // Check for potentially invalid dates
+     if (checkIn?.includes('invalid') || checkOut?.includes('invalid')) {
+        throw new Error('AI could not extract valid dates.');
      }
 
-    // Validate the structure using the defined HotelSearchCriteriaSchema.
-    searchCriteria = HotelSearchCriteriaSchema.parse(extractedCriteria);
-    console.log("Extracted Search Criteria:", searchCriteria);
+    // Validate the structure and types using the final schema, which includes the .positive() check.
+    searchCriteria = FinalHotelSearchCriteriaSchema.parse(extractedCriteria);
+    console.log("Validated Search Criteria:", searchCriteria);
   } catch (error: any) {
-    console.error("LLM provided invalid search criteria:", error); // Log the full error object
+    console.error("LLM provided invalid search criteria or validation failed:", error); // Log the full error object
     if (error instanceof z.ZodError) {
         // Format Zod errors for clarity
         const formattedErrors = error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ');
@@ -111,7 +116,14 @@ async (input) => {
 
   // 3. Find available hotels (using the mock service for now).
   // In a real app, call the actual hotel search API here.
-  const availableHotels = await findHotels(searchCriteria);
+  let availableHotels: Hotel[];
+  try {
+    availableHotels = await findHotels(searchCriteria);
+  } catch (error: any) {
+     console.error("Error finding hotels:", error);
+     throw new Error(`Failed to search for hotels: ${error.message || 'Unknown error'}`);
+  }
+
 
   if (!availableHotels || availableHotels.length === 0) {
     throw new Error(`No hotels found matching your criteria in ${searchCriteria.city} for the specified dates.`);

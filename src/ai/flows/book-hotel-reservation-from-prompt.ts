@@ -42,32 +42,30 @@ const extractHotelSearchCriteriaTool = ai.defineTool({
   }),
 },
 async (input) => {
-  // In a real scenario, this tool would use an LLM or NLP logic
-  // to reliably extract the details from the input.prompt.
-  // The current LLM prompt will handle this extraction.
-  // This tool definition provides the structure/schema for the LLM.
-  throw new Error("This tool should not be called directly; its schema is used by the LLM.");
+  // This tool is primarily for schema definition to guide the LLM output format.
+  // It's not expected to be called directly in this flow version.
+  throw new Error("This tool's implementation should not be called in this flow; its schema guides the LLM.");
 });
 
 
 const bookHotelPrompt = ai.definePrompt({
   name: 'bookHotelPrompt',
-  // Provide the tool for the LLM to use for extraction.
+  // Provide the tool schema for the LLM to understand the desired output format.
+  // Although we don't check toolRequests anymore, defining it here helps guide the LLM.
   tools: [extractHotelSearchCriteriaTool],
   input: {
     schema: BookHotelReservationFromPromptInputSchema,
   },
   output: {
-    // The prompt's direct output is now the structured search criteria.
-    // The flow will handle the booking step after getting this output.
+    // The prompt's direct output is the structured search criteria.
     schema: extractHotelSearchCriteriaTool.outputSchema,
   },
-  prompt: `You are a hotel booking assistant. Your task is to extract the hotel search criteria from the following user prompt using the mandatory extractHotelSearchCriteria tool.
+  prompt: `You are a hotel booking assistant. Your task is to extract the hotel search criteria from the following user prompt.
 
   Prompt: {{{prompt}}}
 
   Ensure you accurately extract the city, check-in date (YYYY-MM-DD), check-out date (YYYY-MM-DD), and the number of guests.
-  Return ONLY the structured JSON output required by the extractHotelSearchCriteria tool. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'city' field and set dates/guests appropriately to indicate failure.`,
+  Return ONLY the structured JSON output required by the extractHotelSearchCriteria tool's output schema. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'city' field and set dates/guests appropriately to indicate failure (e.g., use "Invalid date" or 0 for guests).`,
 });
 
 
@@ -80,40 +78,39 @@ const bookHotelReservationFromPromptFlow = ai.defineFlow<
   outputSchema: BookHotelReservationFromPromptOutputSchema,
 },
 async (input) => {
-  // 1. Run the prompt to extract search criteria using the tool.
+  // 1. Run the prompt to extract search criteria directly into the output.
   const llmResponse = await bookHotelPrompt(input);
+  const extractedCriteria = llmResponse.output;
 
-  // 2. Check if the LLM requested the tool and get the extracted criteria.
-  const toolRequest = llmResponse.toolRequests(extractHotelSearchCriteriaTool.name)[0];
-
-  if (!toolRequest) {
-     // If the tool wasn't requested, the LLM likely couldn't extract the data.
-     // Check if the LLM provided an explanation in its direct output (if any)
-     const directOutput = llmResponse.output;
-     let errorMessage = 'AI failed to understand the hotel request. Could not extract necessary details (city, dates, guests).';
-     if (directOutput?.city && typeof directOutput.city === 'string' && directOutput.city.includes('issue')) {
-        errorMessage = `AI Processing Error: ${directOutput.city}`; // Use LLM's explanation if provided as per prompt instructions
-     } else if (llmResponse.text()) {
-        errorMessage = `AI Response: ${llmResponse.text()}`; // Fallback to raw text response
-     }
-     console.error("LLM did not request the extraction tool.", llmResponse);
-     throw new Error(errorMessage);
+  // 2. Validate the extracted criteria directly from the output.
+  if (!extractedCriteria) {
+      throw new Error('AI failed to process the request. No hotel criteria were generated.');
   }
 
-  // 3. Validate the input extracted by the LLM using the tool's schema.
   let searchCriteria: HotelSearchCriteria;
   try {
-    searchCriteria = extractHotelSearchCriteriaTool.outputSchema.parse(toolRequest.input);
+     // Check for failure indication from the prompt itself (e.g., in the city field)
+     if (extractedCriteria.city?.toLowerCase().includes('issue') || extractedCriteria.city?.toLowerCase().includes('invalid') || extractedCriteria.city?.toLowerCase().includes('fail')) {
+       throw new Error(`AI Processing Error: ${extractedCriteria.city}`);
+     }
+     // Check for potentially invalid dates/guests as per prompt instructions
+     if (extractedCriteria.checkInDate?.toLowerCase().includes('invalid') || extractedCriteria.checkOutDate?.toLowerCase().includes('invalid') || extractedCriteria.numberOfGuests === 0) {
+        throw new Error('AI could not extract valid dates or number of guests.');
+     }
+
+    // Validate the structure using the tool's *output* schema, as the prompt aims to produce this.
+    searchCriteria = extractHotelSearchCriteriaTool.outputSchema.parse(extractedCriteria);
     console.log("Extracted Search Criteria:", searchCriteria);
   } catch (error: any) {
     console.error("LLM provided invalid search criteria:", error);
     if (error instanceof z.ZodError) {
         throw new Error(`AI provided invalid search criteria: ${error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ')}`);
     }
-    throw new Error("AI failed to extract valid search criteria.");
+    // Use the error message if it came from the checks above or parsing
+    throw new Error(error.message || "AI failed to extract valid search criteria.");
   }
 
-  // 4. Find available hotels (using the mock service for now).
+  // 3. Find available hotels (using the mock service for now).
   // In a real app, call the actual hotel search API here.
   const availableHotels = await findHotels(searchCriteria);
 
@@ -121,7 +118,7 @@ async (input) => {
     throw new Error(`No hotels found matching your criteria in ${searchCriteria.city} for the specified dates.`);
   }
 
-  // 5. Select a hotel (e.g., the first one) and simulate booking.
+  // 4. Select a hotel (e.g., the first one) and simulate booking.
   // In a real app, call the booking API here.
   const hotelToBook = availableHotels[0];
   console.log(`Simulating booking for: ${hotelToBook.name}`);
@@ -129,7 +126,7 @@ async (input) => {
   // Simulate booking confirmation
   const confirmationNumber = `CONF-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
-  // 6. Return the booking details.
+  // 5. Return the booking details.
   return {
     hotelName: hotelToBook.name,
     confirmationNumber: confirmationNumber,

@@ -54,14 +54,22 @@ export default function BookFlightPage() {
        let errorMessage = "Failed to book flight. Please try again.";
        try {
           if (error?.message) {
-            // Genkit might wrap errors in JSON strings
-            const parsedError = JSON.parse(error.message);
-             if (parsedError?.message) {
-              errorMessage = parsedError.message;
-             }
+            // Check if it looks like a JSON string before parsing
+            if (error.message.trim().startsWith('{') && error.message.trim().endsWith('}')) {
+                const parsedError = JSON.parse(error.message);
+                 if (parsedError?.message) {
+                    errorMessage = parsedError.message;
+                 }
+            } else {
+                 // Use the message directly if it's not JSON
+                 errorMessage = error.message;
+            }
           }
        } catch (parseError) {
-         // Ignore parsing errors
+         // If parsing fails or original message is missing, use the original error message if available
+         if (error?.message) {
+             errorMessage = error.message;
+         }
        }
       toast({
         title: "Error",
@@ -75,11 +83,19 @@ export default function BookFlightPage() {
 
   const formatTime = (timeString: string) => {
      try {
+        // Basic check for HH:MM format
+        if (!/^\d{1,2}:\d{2}$/.test(timeString)) {
+            return timeString; // Return original if format is unexpected
+        }
         const [hours, minutes] = timeString.split(':');
         const date = new Date();
         date.setHours(parseInt(hours, 10));
         date.setMinutes(parseInt(minutes, 10));
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        // Check if date is valid after setting hours/minutes
+        if (isNaN(date.getTime())) {
+            return timeString;
+        }
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }); // Use 12-hour format
      } catch {
         return timeString; // Return original string if formatting fails
      }

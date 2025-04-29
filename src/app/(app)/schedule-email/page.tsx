@@ -54,13 +54,22 @@ export default function ScheduleEmailPage() {
        let errorMessage = "Failed to schedule email. Please try again.";
         try {
           if (error?.message) {
-             const parsedError = JSON.parse(error.message);
-             if (parsedError?.message) {
-               errorMessage = parsedError.message;
+             // Check if it looks like a JSON string before parsing
+             if (error.message.trim().startsWith('{') && error.message.trim().endsWith('}')) {
+               const parsedError = JSON.parse(error.message);
+               if (parsedError?.message) {
+                 errorMessage = parsedError.message;
+               }
+             } else {
+               // Use the message directly if it's not JSON
+               errorMessage = error.message;
              }
            }
         } catch (parseError) {
-          // Ignore parsing error
+          // If parsing fails or original message is missing, use the default or original message if available
+          if (error?.message) {
+              errorMessage = error.message;
+          }
         }
       toast({
         title: "Error",
@@ -138,6 +147,9 @@ export default function ScheduleEmailPage() {
               Status: {result.success ? "Successfully Scheduled" : "Failed to Schedule"}
             </p>
             <p className="mt-2 text-muted-foreground text-sm">Details: {result.details}</p>
+            {result.messageId && result.success && (
+               <p className="mt-1 text-xs text-muted-foreground">Message ID: {result.messageId}</p>
+            )}
           </CardContent>
         </Card>
       )}

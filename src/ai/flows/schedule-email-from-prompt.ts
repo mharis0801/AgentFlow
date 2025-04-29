@@ -68,7 +68,7 @@ const emailSchedulingPrompt = ai.definePrompt({
   Prompt: {{{prompt}}}
 
   Ensure you extract all necessary details for the sendEmailTool.
-  The JSON output of this prompt should represent the email to be sent.`,
+  The JSON output of this prompt should represent the email to be sent. If you cannot extract the required details (to, subject, body), explain why in the 'body' field and do not attempt to use the tool.`,
 });
 
 const scheduleEmailFromPromptFlow = ai.defineFlow<
@@ -86,32 +86,52 @@ const scheduleEmailFromPromptFlow = ai.defineFlow<
     const emailDetails = llmResponse.output;
 
     if (!emailDetails) {
-      throw new Error('LLM failed to extract email details from the prompt.');
+      // Throw a more specific error if LLM output is missing entirely
+      throw new Error('AI failed to process the request. No email details were generated.');
     }
 
     // 2. Check if the LLM decided to use the sendEmailTool
     const toolRequest = llmResponse.toolRequests(sendEmailTool.name)[0];
 
     if (!toolRequest) {
-      // This shouldn't happen based on the prompt, but handle it just in case.
+      // If the tool wasn't requested, it might be because the LLM couldn't extract details.
+      // Return a failure state with the LLM's explanation if available.
       console.warn('LLM did not request to use the sendEmailTool.');
+      const failureReason = emailDetails.body || 'Could not determine email details or failed to initiate sending.';
       return {
          success: false,
-         details: 'Could not determine email details or failed to initiate sending.',
+         details: `Failed: ${failureReason}`,
       }
     }
 
     // 3. Execute the sendEmailTool with the details extracted by the LLM
     console.log('Executing sendEmailTool with:', toolRequest.input);
-    const toolOutput = await sendEmailTool(toolRequest.input);
+    try {
+       // Validate the input provided by the LLM before sending to the tool
+       const validatedInput = sendEmailTool.inputSchema.parse(toolRequest.input);
+       const toolOutput = await sendEmailTool(validatedInput);
 
-    // 4. Construct the final output based on the tool's result
-    return {
-      success: toolOutput.success,
-      details: toolOutput.success
-        ? `Email successfully sent to ${toolRequest.input.to}. Subject: "${toolRequest.input.subject}"`
-        : 'Failed to send the email via the tool.',
-      messageId: toolOutput.messageId,
-    };
+       // 4. Construct the final output based on the tool's result
+       return {
+         success: toolOutput.success,
+         details: toolOutput.success
+           ? `Email successfully sent to ${validatedInput.to}. Subject: "${validatedInput.subject}"`
+           : 'Failed to send the email via the tool.',
+         messageId: toolOutput.messageId,
+       };
+    } catch (error: any) {
+       console.error('Error executing or validating sendEmailTool:', error);
+        // Handle potential Zod validation errors or tool execution errors
+       let errorMessage = 'An error occurred while trying to send the email.';
+       if (error instanceof z.ZodError) {
+           errorMessage = `AI provided invalid details for sending the email: ${error.errors.map(e => e.message).join(', ')}`;
+       } else if (error.message) {
+           errorMessage = error.message;
+       }
+       return {
+           success: false,
+           details: errorMessage,
+       };
+    }
   }
 );

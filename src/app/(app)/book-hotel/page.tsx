@@ -53,14 +53,22 @@ export default function BookHotelPage() {
        let errorMessage = "Failed to book hotel. Please try again.";
        try {
           if (error?.message) {
-            // Genkit might wrap errors in JSON strings
-            const parsedError = JSON.parse(error.message);
-             if (parsedError?.message) {
-              errorMessage = parsedError.message;
-             }
+            // Check if it looks like a JSON string before parsing
+            if (error.message.trim().startsWith('{') && error.message.trim().endsWith('}')) {
+                const parsedError = JSON.parse(error.message);
+                 if (parsedError?.message) {
+                    errorMessage = parsedError.message;
+                 }
+            } else {
+                 // Use the message directly if it's not JSON
+                 errorMessage = error.message;
+            }
           }
        } catch (parseError) {
-          // Ignore parsing errors
+          // If parsing fails or original message is missing, use the original error message if available
+           if (error?.message) {
+              errorMessage = error.message;
+           }
        }
       toast({
         title: "Error",

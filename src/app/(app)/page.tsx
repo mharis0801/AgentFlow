@@ -6,7 +6,7 @@ import { Mail, Calendar, Plane, Hotel, PlusCircle } from 'lucide-react';
 import Link from "next/link";
 import { useAuth } from "@/contexts/auth-context"; // Import useAuth
 
-export default function DashboardPage() {
+export default function DashboardPage() { // Changed component name
   const { user } = useAuth(); // Get user info if needed
 
   const quickActions = [

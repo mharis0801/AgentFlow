@@ -11,12 +11,13 @@
 import { ai } from '@/ai/ai-instance';
 import { z } from 'genkit';
 import { sendEmailTool } from '@/ai/tools/send-email'; // To send invites
-import { auth } from '@/lib/firebase/firebase'; // Import the initialized auth instance
+// Removed unused import: import { auth } from '@/lib/firebase/firebase';
 // import { readEmailsTool } from '@/ai/tools/email-reader'; // Potential future use
 
-// Input still takes a direct prompt
+// Input now includes the user's email
 const SetupMeetingFromPromptInputSchema = z.object({
   prompt: z.string().describe('A prompt describing the meeting request (e.g., participants, time, topic).'),
+  currentUserEmail: z.string().email().describe('The email of the user making the request (organizer).'),
 });
 export type SetupMeetingFromPromptInput = z.infer<typeof SetupMeetingFromPromptInputSchema>;
 
@@ -38,6 +39,10 @@ const SetupMeetingFromPromptOutputSchema = z.object({
 export type SetupMeetingFromPromptOutput = z.infer<typeof SetupMeetingFromPromptOutputSchema>;
 
 export async function setupMeetingFromPrompt(input: SetupMeetingFromPromptInput): Promise<SetupMeetingFromPromptOutput> {
+  // Validate input to ensure currentUserEmail is provided
+  if (!input.currentUserEmail) {
+      throw new Error("Current user's email must be provided to set up a meeting.");
+  }
   return setupMeetingFromPromptFlow(input);
 }
 
@@ -47,11 +52,8 @@ const meetingSetupPrompt = ai.definePrompt({
   // Provide the sendEmailTool for sending invites
   tools: [sendEmailTool],
   input: {
-    schema: z.object({
-      prompt: z.string().describe('A prompt describing the meeting request.'),
-      // Could add user preferences (e.g., default calendar) here if needed
-      currentUserEmail: z.string().email().describe('The email of the user making the request (organizer).'),
-    }),
+    // Schema matches the flow's input schema now
+    schema: SetupMeetingFromPromptInputSchema,
   },
   output: {
     // Output schema focuses on the *parsed* meeting details.
@@ -80,19 +82,11 @@ const setupMeetingFromPromptFlow = ai.defineFlow<
     outputSchema: SetupMeetingFromPromptOutputSchema,
   },
   async (input) => {
-    // Get current user's email from Firebase Auth context
-    const currentUser = auth.currentUser;
-    if (!currentUser || !currentUser.email) {
-      // This case should ideally be handled by ProtectedRoute, but adding a check here.
-      throw new Error('User is not authenticated or email is unavailable.');
-    }
-    const currentUserEmail = currentUser.email;
+    // Current user's email is now passed directly in the input
+    const currentUserEmail = input.currentUserEmail;
 
-    // 1. Run the prompt to extract meeting details
-    const llmResponse = await meetingSetupPrompt({
-        prompt: input.prompt,
-        currentUserEmail: currentUserEmail,
-     });
+    // 1. Run the prompt to extract meeting details, passing the input which includes currentUserEmail
+    const llmResponse = await meetingSetupPrompt(input);
     const meetingDetails = llmResponse.output;
 
     if (!meetingDetails) {

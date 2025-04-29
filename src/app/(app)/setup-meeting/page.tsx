@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, CalendarCheck } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context"; // Import useAuth
 
 const FormSchema = z.object({
   prompt: z.string().min(10, {
@@ -28,6 +29,7 @@ const FormSchema = z.object({
 
 export default function SetupMeetingPage() {
   const { toast } = useToast();
+  const { user } = useAuth(); // Get user from auth context
   const [isLoading, setIsLoading] = React.useState(false);
   const [result, setResult] = React.useState<SetupMeetingFromPromptOutput | null>(null);
 
@@ -39,10 +41,23 @@ export default function SetupMeetingPage() {
   });
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
+    if (!user?.email) {
+      toast({
+        title: "Authentication Error",
+        description: "Could not identify the current user. Please sign in again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
     setResult(null);
     try {
-      const response = await setupMeetingFromPrompt({ prompt: data.prompt });
+      // Pass the current user's email to the flow
+      const response = await setupMeetingFromPrompt({
+        prompt: data.prompt,
+        currentUserEmail: user.email,
+      });
       setResult(response);
       toast({
         title: "Meeting Setup Processed",
@@ -54,13 +69,21 @@ export default function SetupMeetingPage() {
       let errorMessage = "Failed to set up meeting. Please try again.";
       try {
          if (error?.message) {
-           const parsedError = JSON.parse(error.message);
-           if (parsedError?.message) {
-             errorMessage = parsedError.message;
+           // Attempt to parse only if it looks like a JSON string
+           if (error.message.trim().startsWith('{') && error.message.trim().endsWith('}')) {
+             const parsedError = JSON.parse(error.message);
+             if (parsedError?.message) {
+               errorMessage = parsedError.message;
+             }
+           } else {
+             errorMessage = error.message; // Use the message directly if not JSON
            }
          }
       } catch (parseError) {
-         // Ignore if parsing fails, use default message
+         // Ignore if parsing fails, use default message or original error message
+          if (error?.message) {
+              errorMessage = error.message;
+          }
       }
 
       toast({
@@ -111,7 +134,7 @@ export default function SetupMeetingPage() {
               />
             </CardContent>
             <CardFooter className="flex justify-end">
-              <Button type="submit" disabled={isLoading} className="bg-primary hover:bg-primary/90">
+              <Button type="submit" disabled={isLoading || !user} className="bg-primary hover:bg-primary/90">
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -141,6 +164,7 @@ export default function SetupMeetingPage() {
              <p><strong>Ends:</strong> {new Date(result.meetingDetails.endTime).toLocaleString()}</p>
              {result.meetingDetails.location && <p><strong>Location:</strong> {result.meetingDetails.location}</p>}
              {result.meetingDetails.agenda && <p><strong>Agenda:</strong> {result.meetingDetails.agenda}</p>}
+             <p><strong>Invite Sent:</strong> {result.inviteSent ? 'Yes' : 'No'}</p>
            </CardContent>
          </Card>
        )}

@@ -4,7 +4,10 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { findAndBookFlights, FindAndBookFlightsOutput } from "@/ai/flows/find-and-book-flights";
+import { format } from "date-fns";
+import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle } from "lucide-react";
+
+import { findAndBookFlights, FindAndBookFlightsOutput } from "@/ai/flows/find-and-book-flights"; // Renamed import
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -15,34 +18,40 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, PlaneTakeoff, CheckCircle } from "lucide-react";
-import { Flight } from "@/services/flight-booking"; // Import Flight type
-import { useAuth } from "@/contexts/auth-context"; // Import useAuth
+import { useAuth } from "@/contexts/auth-context";
+import { Flight } from "@/services/flight-booking";
+import { cn } from "@/lib/utils";
 
+// Zod schema for form validation on the client-side
 const FormSchema = z.object({
-  prompt: z.string().min(10, {
-    message: "Flight request must be at least 10 characters.",
-  }),
+  departureCity: z.string().min(1, { message: "Departure city/airport is required." }),
+  arrivalCity: z.string().min(1, { message: "Arrival city/airport is required." }),
+  departureDate: z.date({ required_error: "Departure date is required." }),
+  numberOfPassengers: z.coerce.number().int().positive({ message: "Number of passengers must be a positive number." }),
 });
 
-// Extend the output type to include task ID
 type FlightBookingResult = FindAndBookFlightsOutput & {
     taskId?: string;
 };
 
 export default function BookFlightPage() {
   const { toast } = useToast();
-   const { user } = useAuth(); // Get user from auth context
+  const { user } = useAuth();
   const [isLoading, setIsLoading] = React.useState(false);
-  const [result, setResult] = React.useState<FlightBookingResult | null>(null); // Use extended type
+  const [result, setResult] = React.useState<FlightBookingResult | null>(null);
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
-      prompt: "",
+      departureCity: "",
+      arrivalCity: "",
+      departureDate: undefined,
+      numberOfPassengers: 1,
     },
   });
 
@@ -59,11 +68,15 @@ export default function BookFlightPage() {
     setIsLoading(true);
     setResult(null);
     try {
-       // Pass the user's UID to the flow
-      const response = await findAndBookFlights({
-          prompt: data.prompt,
-          userId: user.uid,
-       });
+        // Format date to YYYY-MM-DD string before sending
+        const inputData = {
+            ...data,
+            departureDate: format(data.departureDate, 'yyyy-MM-dd'),
+            userId: user.uid,
+        };
+
+       // Call the refactored flow function
+      const response = await findAndBookFlights(inputData);
       setResult(response);
       toast({
         title: "Flight Booking Processed",
@@ -71,29 +84,9 @@ export default function BookFlightPage() {
       });
     } catch (error: any) {
       console.error("Error booking flight:", error);
-       let errorMessage = "Failed to book flight. Please try again.";
-       try {
-          if (error?.message) {
-            // Check if it looks like a JSON string before parsing
-            if (error.message.trim().startsWith('{') && error.message.trim().endsWith('}')) {
-                const parsedError = JSON.parse(error.message);
-                 if (parsedError?.message) {
-                    errorMessage = parsedError.message;
-                 }
-            } else {
-                 // Use the message directly if it's not JSON
-                 errorMessage = error.message;
-            }
-          }
-       } catch (parseError) {
-         // If parsing fails or original message is missing, use the original error message if available
-         if (error?.message) {
-             errorMessage = error.message;
-         }
-       }
       toast({
         title: "Error",
-        description: errorMessage,
+        description: error.message || "Failed to book flight. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -103,24 +96,17 @@ export default function BookFlightPage() {
 
   const formatTime = (timeString: string) => {
      try {
-        // Basic check for HH:MM format
-        if (!/^\d{1,2}:\d{2}$/.test(timeString)) {
-            return timeString; // Return original if format is unexpected
-        }
+        if (!/^\d{1,2}:\d{2}$/.test(timeString)) return timeString;
         const [hours, minutes] = timeString.split(':');
         const date = new Date();
         date.setHours(parseInt(hours, 10));
         date.setMinutes(parseInt(minutes, 10));
-        // Check if date is valid after setting hours/minutes
-        if (isNaN(date.getTime())) {
-            return timeString;
-        }
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }); // Use 12-hour format
+        if (isNaN(date.getTime())) return timeString;
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
      } catch {
-        return timeString; // Return original string if formatting fails
+        return timeString;
      }
   };
-
 
   return (
     <div className="container mx-auto py-8">
@@ -130,36 +116,102 @@ export default function BookFlightPage() {
         <CardHeader>
           <CardTitle>AI Flight Booker</CardTitle>
           <CardDescription>
-            Describe the flight you're looking for. Include origin, destination, departure date, number of passengers, and any preferences (e.g., airline, direct flight). The AI will find options and book the best fit.
-            Example: "Find a direct flight from New York (JFK) to Los Angeles (LAX) on December 1st 2024 for 1 passenger. Prefer morning departure."
+            Enter your flight details below. The AI will find available options and book the best fit (simulation).
           </CardDescription>
         </CardHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
-            <CardContent className="space-y-4">
+            <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Departure City */}
               <FormField
                 control={form.control}
-                name="prompt"
+                name="departureCity"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Your Flight Request</FormLabel>
+                    <FormLabel>Departure City / Airport</FormLabel>
                     <FormControl>
-                      <Textarea
-                        placeholder="e.g., Book a round trip flight from London to Tokyo..."
-                        className="resize-none min-h-[150px]"
-                        {...field}
-                        disabled={isLoading}
-                      />
+                      <Input placeholder="e.g., New York, JFK" {...field} disabled={isLoading} />
                     </FormControl>
-                    <FormDescription>
-                      Specify origin, destination, dates, passengers, and preferences.
-                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Arrival City */}
+              <FormField
+                control={form.control}
+                name="arrivalCity"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Arrival City / Airport</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g., Los Angeles, LAX" {...field} disabled={isLoading} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Departure Date */}
+              <FormField
+                control={form.control}
+                name="departureDate"
+                render={({ field }) => (
+                  <FormItem className="flex flex-col">
+                    <FormLabel>Departure Date</FormLabel>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <FormControl>
+                          <Button
+                            variant={"outline"}
+                            className={cn(
+                              "w-full pl-3 text-left font-normal",
+                              !field.value && "text-muted-foreground"
+                            )}
+                            disabled={isLoading}
+                          >
+                            {field.value ? (
+                              format(field.value, "PPP") // Display format
+                            ) : (
+                              <span>Pick a date</span>
+                            )}
+                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                          </Button>
+                        </FormControl>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={field.value}
+                          onSelect={field.onChange}
+                          disabled={(date) =>
+                            date < new Date(new Date().setHours(0, 0, 0, 0)) // Disable past dates
+                          }
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Number of Passengers */}
+              <FormField
+                control={form.control}
+                name="numberOfPassengers"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Number of Passengers</FormLabel>
+                    <FormControl>
+                      <Input type="number" min="1" placeholder="e.g., 1" {...field} disabled={isLoading} />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </CardContent>
-            <CardFooter className="flex justify-end">
+            <CardFooter className="flex justify-end pt-6">
               <Button type="submit" disabled={isLoading || !user} className="bg-primary hover:bg-primary/90">
                 {isLoading ? (
                   <>

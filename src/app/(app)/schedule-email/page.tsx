@@ -4,7 +4,7 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { scheduleEmailFromPrompt, ScheduleEmailFromPromptOutput } from "@/ai/flows/schedule-email-from-prompt";
+import { scheduleEmail, ScheduleEmailOutput } from "@/ai/flows/schedule-email"; // Import the new flow
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -15,28 +15,34 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, MailCheck } from "lucide-react";
-import { useAuth } from "@/contexts/auth-context"; // Import useAuth
+import { useAuth } from "@/contexts/auth-context";
 
+// Zod schema for form validation on the client-side
 const FormSchema = z.object({
-  prompt: z.string().min(10, {
-    message: "Prompt must be at least 10 characters.",
-  }),
+  to: z.string().email({ message: "Please enter a valid recipient email address." }),
+  subject: z.string().min(1, { message: "Subject cannot be empty." }),
+  body: z.string().min(1, { message: "Email body cannot be empty." }),
+  // Optional: Add scheduling fields later if needed
+  // scheduleTime: z.date().optional(),
 });
 
 export default function ScheduleEmailPage() {
   const { toast } = useToast();
-  const { user } = useAuth(); // Get user from auth context
+  const { user } = useAuth();
   const [isLoading, setIsLoading] = React.useState(false);
-  const [result, setResult] = React.useState<ScheduleEmailFromPromptOutput | null>(null);
+  const [result, setResult] = React.useState<ScheduleEmailOutput | null>(null);
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
-      prompt: "",
+      to: "",
+      subject: "",
+      body: "",
     },
   });
 
@@ -44,7 +50,7 @@ export default function ScheduleEmailPage() {
      if (!user) {
        toast({
          title: "Authentication Error",
-         description: "You must be signed in to schedule an email.",
+         description: "You must be signed in to send an email.",
          variant: "destructive",
        });
        return;
@@ -53,44 +59,31 @@ export default function ScheduleEmailPage() {
     setIsLoading(true);
     setResult(null); // Clear previous results
     try {
-      // Pass the user's UID to the flow
-      const response = await scheduleEmailFromPrompt({
-        prompt: data.prompt,
+      // Prepare data for the flow
+      const inputData = {
+        ...data,
         userId: user.uid,
-      });
+      };
+
+      // Call the new flow function
+      const response = await scheduleEmail(inputData);
       setResult(response);
       toast({
         title: response.success ? "Email Request Processed" : "Processing Failed",
         description: response.details,
         variant: response.success ? "default" : "destructive",
       });
+       // Optionally reset form on success
+       if (response.success) {
+           form.reset();
+       }
     } catch (error: any) {
-       console.error("Error scheduling email:", error);
-       let errorMessage = "Failed to schedule email. Please try again.";
-        try {
-          if (error?.message) {
-             // Check if it looks like a JSON string before parsing
-             if (error.message.trim().startsWith('{') && error.message.trim().endsWith('}')) {
-               const parsedError = JSON.parse(error.message);
-               if (parsedError?.message) {
-                 errorMessage = parsedError.message;
-               }
-             } else {
-               // Use the message directly if it's not JSON
-               errorMessage = error.message;
-             }
-           }
-        } catch (parseError) {
-          // If parsing fails or original message is missing, use the default or original message if available
-          if (error?.message) {
-              errorMessage = error.message;
-          }
-        }
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
+       console.error("Error sending email:", error);
+       toast({
+         title: "Error",
+         description: error.message || "Failed to send email. Please try again.",
+         variant: "destructive",
+       });
     } finally {
       setIsLoading(false);
     }
@@ -98,50 +91,99 @@ export default function ScheduleEmailPage() {
 
   return (
     <div className="container mx-auto py-8">
-      <h1 className="text-3xl font-bold mb-6 text-foreground">Schedule an Email</h1>
+      <h1 className="text-3xl font-bold mb-6 text-foreground">Send an Email</h1>
 
       <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
-          <CardTitle>AI Email Scheduler</CardTitle>
+          <CardTitle>Compose Email</CardTitle>
           <CardDescription>
-            Describe the email you want to send, who it's for, and when. Our AI will handle the rest.
-            Example: "Schedule an email to john.doe@example.com for tomorrow at 9 AM EST regarding the project update. Subject: Project Update. Body: Hi John, Please find the latest project update attached."
+            Fill in the details below. The AI agent will send the email on your behalf (simulation).
           </CardDescription>
         </CardHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-6">
+              {/* Recipient Email */}
               <FormField
                 control={form.control}
-                name="prompt"
+                name="to"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Your Request</FormLabel>
+                    <FormLabel>To</FormLabel>
                     <FormControl>
-                      <Textarea
-                        placeholder="e.g., Send an email to team@example.com next Monday morning..."
-                        className="resize-none min-h-[150px]"
-                        {...field}
-                        disabled={isLoading}
-                      />
+                      <Input type="email" placeholder="recipient@example.com" {...field} disabled={isLoading} />
                     </FormControl>
-                    <FormDescription>
-                      Provide details like recipient, subject, content, and desired sending time.
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+
+              {/* Subject */}
+              <FormField
+                control={form.control}
+                name="subject"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Subject</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Meeting Follow-up" {...field} disabled={isLoading} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Email Body */}
+              <FormField
+                control={form.control}
+                name="body"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Body</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Write your email content here..."
+                        className="resize-none min-h-[200px]"
+                        {...field}
+                        disabled={isLoading}
+                      />
+                    </FormControl>
+                     <FormDescription>
+                       Compose the main content of your email.
+                     </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+               {/* Optional Scheduling Fields (Example) */}
+               {/*
+               <FormField
+                 control={form.control}
+                 name="scheduleTime"
+                 render={({ field }) => (
+                   <FormItem className="flex flex-col">
+                     <FormLabel>Schedule for Later (Optional)</FormLabel>
+                     <Popover>
+                       <PopoverTrigger asChild>...</PopoverTrigger>
+                       <PopoverContent>...</PopoverContent>
+                     </Popover>
+                     <FormMessage />
+                   </FormItem>
+                 )}
+               />
+               */}
+
             </CardContent>
-            <CardFooter className="flex justify-end">
+            <CardFooter className="flex justify-end pt-6">
               <Button type="submit" disabled={isLoading || !user} className="bg-primary hover:bg-primary/90">
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing...
+                    Sending...
                   </>
                 ) : (
-                  "Schedule Email"
+                  "Send Email"
                 )}
               </Button>
             </CardFooter>
@@ -154,12 +196,12 @@ export default function ScheduleEmailPage() {
           <CardHeader>
              <CardTitle className="flex items-center gap-2">
                <MailCheck className={`h-5 w-5 ${result.success ? 'text-green-600' : 'text-destructive'}`} />
-                Processing Result
+                Sending Result
              </CardTitle>
           </CardHeader>
           <CardContent>
             <p className={result.success ? "text-green-600 font-medium" : "text-destructive font-medium"}>
-              Status: {result.success ? "Successfully Processed" : "Failed to Process"}
+              Status: {result.success ? "Successfully Sent" : "Failed to Send"}
             </p>
             <p className="mt-2 text-muted-foreground text-sm">Details: {result.details}</p>
             {result.messageId && result.success && (

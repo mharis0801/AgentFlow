@@ -1,6 +1,6 @@
 'use server';
 /**
- * @fileOverview An AI agent for finding and booking flights based on user prompts.
+ * @fileOverview An AI agent for finding and booking flights based on structured user input.
  * Saves the flight details and result to Firestore.
  *
  * - findAndBookFlights - A function that handles the flight finding and booking process.
@@ -13,16 +13,17 @@ import {z} from 'genkit';
 import {Flight, FlightSearchCriteria, findFlights} from '@/services/flight-booking';
 import { saveAgentTask } from '@/services/firestore'; // Import Firestore service
 
+// Define the structured input schema for the form
 const FindAndBookFlightsInputSchema = z.object({
-  prompt: z
-    .string()
-    .describe(
-      'A prompt describing the desired flight, including origin, destination, dates, and preferences (e.g., airline, price range).'
-    ),
-   userId: z.string().describe("The UID of the user making the request."), // Added userId
+    departureCity: z.string().min(1, { message: "Departure city is required." }).describe('The departure city or airport code.'),
+    arrivalCity: z.string().min(1, { message: "Arrival city is required." }).describe('The arrival city or airport code.'),
+    departureDate: z.string().date('Invalid departure date format. Use YYYY-MM-DD.').describe('The departure date (YYYY-MM-DD).'),
+    numberOfPassengers: z.number().int().positive({ message: 'Number of passengers must be positive.' }).describe('The number of passengers (must be a positive integer).'),
+    userId: z.string().describe("The UID of the user making the request."),
 });
 export type FindAndBookFlightsInput = z.infer<typeof FindAndBookFlightsInputSchema>;
 
+// Output schema remains the same
 const FindAndBookFlightsOutputSchema = z.object({
   flights: z.array(z.object({
     flightNumber: z.string(),
@@ -30,109 +31,81 @@ const FindAndBookFlightsOutputSchema = z.object({
     arrivalAirport: z.string(),
     departureTime: z.string(), // Keep as string from mock API
     arrivalTime: z.string(), // Keep as string from mock API
-  })).describe('A list of flights that match the user prompt.'),
+  })).describe('A list of flights that match the user criteria.'),
   bookingConfirmation: z.string().describe('A confirmation message for the booked flight.'),
   taskId: z.string().optional().describe("The ID of the saved task in Firestore."),
 });
 export type FindAndBookFlightsOutput = z.infer<typeof FindAndBookFlightsOutputSchema>;
 
+// Renamed function to reflect structured input
 export async function findAndBookFlights(input: FindAndBookFlightsInput): Promise<FindAndBookFlightsOutput> {
     if (!input.userId) {
         throw new Error("User ID must be provided to book flights.");
     }
-  return findAndBookFlightsFlow(input);
+    // Validate input using Zod before proceeding
+    const validationResult = FindAndBookFlightsInputSchema.safeParse(input);
+    if (!validationResult.success) {
+        const errorMessage = validationResult.error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ');
+        throw new Error(`Invalid input: ${errorMessage}`);
+    }
+    return findAndBookFlightsFlow(validationResult.data); // Pass validated data
 }
 
-// Define the schema for the data we need to extract
-const FlightSearchCriteriaSchema = z.object({
-    departureCity: z.string().describe('The departure city or airport code.'),
-    arrivalCity: z.string().describe('The arrival city or airport code.'),
-    departureDate: z.string().date().describe('The departure date (YYYY-MM-DD).'),
-    numberOfPassengers: z.number().int().describe('The number of passengers (must be an integer).'),
-});
 
-const flightSearchPrompt = ai.definePrompt({
-  name: 'flightSearchPrompt',
-  input: {
-    schema: FindAndBookFlightsInputSchema.pick({ prompt: true }), // Only need prompt for LLM
-  },
-  output: {
-    schema: FlightSearchCriteriaSchema,
-  },
-  prompt: `You are an AI travel assistant. Your task is to extract the flight search criteria from the following user prompt.
-  Extract the departure city/airport, arrival city/airport, departure date (in YYYY-MM-DD format), and the number of passengers.
-
-  Prompt: {{{prompt}}}
-
-  Return ONLY the structured JSON output conforming to the required schema. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'departureCity' field and set date/passengers appropriately to indicate failure (e.g., use 0 for passengers if not found).`,
-});
-
-
+// Define the flow using the structured input
 const findAndBookFlightsFlow = ai.defineFlow<
   typeof FindAndBookFlightsInputSchema,
   typeof FindAndBookFlightsOutputSchema
 >(
   {
-    name: 'findAndBookFlightsFlow',
+    name: 'findAndBookFlightsFlow', // Renamed flow
     inputSchema: FindAndBookFlightsInputSchema,
     outputSchema: FindAndBookFlightsOutputSchema,
   },
   async (input) => {
-     const { userId, prompt } = input;
+     const { userId, ...searchCriteria } = input; // Directly use input as search criteria
      let taskId: string | undefined = undefined;
-     let searchCriteria: FlightSearchCriteria | null = null;
      let finalResult: FindAndBookFlightsOutput;
 
      try {
-         // 1. Run the prompt to extract search criteria.
-         const llmResponse = await flightSearchPrompt({ prompt }); // Pass only prompt
-         const extractedCriteria = llmResponse.output;
+         // Input is already validated by the calling function
+         console.log("Validated Flight Search Criteria:", searchCriteria);
 
-         // 2. Validate the extracted criteria.
-         if (!extractedCriteria) {
-             throw new Error('AI failed to process the request. No flight criteria were generated.');
-         }
-          // Check for failure indication from the prompt itself
-         if (extractedCriteria.departureCity?.toLowerCase().includes('issue') || extractedCriteria.departureCity?.toLowerCase().includes('fail')) {
-             throw new Error(`AI Processing Error: ${extractedCriteria.departureCity}`);
-         }
-         // Parse with the Zod schema
-         searchCriteria = FlightSearchCriteriaSchema.parse(extractedCriteria);
-
-         // Add post-extraction validation
-         if (searchCriteria.numberOfPassengers <= 0) {
-             throw new Error("Number of passengers must be a positive integer.");
-         }
-         console.log("Extracted Flight Search Criteria:", searchCriteria);
-
-         // 3. Find available flights.
+         // 1. Find available flights using the mock service.
          const flights = await findFlights(searchCriteria);
          if (!flights || flights.length === 0) {
             throw new Error(`No flights found matching your criteria from ${searchCriteria.departureCity} to ${searchCriteria.arrivalCity} on ${searchCriteria.departureDate}.`);
          }
 
-         // 4. Simulate booking the first available flight.
-         const bookedFlight = flights[0];
+         // 2. Simulate booking the first available flight.
+         const bookedFlight = flights[0]; // Book the first result for simplicity
          console.log(`Simulating booking for flight: ${bookedFlight.flightNumber}`);
          const bookingConfirmationMessage = `Flight ${bookedFlight.flightNumber} from ${bookedFlight.departureAirport} to ${bookedFlight.arrivalAirport} on ${searchCriteria.departureDate} for ${searchCriteria.numberOfPassengers} passenger(s) booked successfully (simulated).`;
 
-         // 5. Save successful task to Firestore.
+         // 3. Save successful task to Firestore.
          const taskDetails = {
              ...searchCriteria, // Departure city, arrival city, date, passengers
-             bookedFlight: bookedFlight, // Include details of the booked flight
+             // Include details of the actual booked flight
+             bookedFlight: {
+                 flightNumber: bookedFlight.flightNumber,
+                 departureAirport: bookedFlight.departureAirport,
+                 arrivalAirport: bookedFlight.arrivalAirport,
+                 departureTime: bookedFlight.departureTime, // Store time as string for now
+                 arrivalTime: bookedFlight.arrivalTime, // Store time as string for now
+             },
          };
           taskId = await saveAgentTask({
               userId: userId,
               type: 'flight',
-              prompt: prompt,
+              // prompt: prompt, // Remove prompt
               details: taskDetails,
               status: 'confirmed', // Or 'booked'
               result: { bookingConfirmationMessage: bookingConfirmationMessage },
           });
 
-         // 6. Return the successful result.
+         // 4. Return the successful result.
          finalResult = {
-           flights: flights, // Return all found flights
+           flights: flights, // Return all found flights as options
            bookingConfirmation: bookingConfirmationMessage,
            taskId: taskId,
          };
@@ -143,9 +116,7 @@ const findAndBookFlightsFlow = ai.defineFlow<
          let errorMessage = 'An unexpected error occurred during flight booking.';
           let status: 'failed' = 'failed';
 
-         if (error instanceof z.ZodError) {
-             errorMessage = `AI provided invalid search criteria: ${error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ')}`;
-         } else if (error.message) {
+         if (error.message) {
              errorMessage = error.message;
              if (errorMessage.startsWith('No flights found')) {
                  // status = 'no_results';
@@ -157,7 +128,7 @@ const findAndBookFlightsFlow = ai.defineFlow<
              taskId = await saveAgentTask({
                  userId: userId,
                  type: 'flight',
-                 prompt: prompt,
+                 // prompt: prompt, // Removed prompt
                  details: searchCriteria || {}, // Save criteria if available
                  status: status,
                  error: errorMessage,

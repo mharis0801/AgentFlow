@@ -37,11 +37,12 @@ export async function findAndBookFlights(input: FindAndBookFlightsInput): Promis
 }
 
 // Define the schema for the data we need to extract
+// Removed `.positive()` from numberOfPassengers to avoid API schema issues. Validation happens later.
 const FlightSearchCriteriaSchema = z.object({
     departureCity: z.string().describe('The departure city or airport code.'),
     arrivalCity: z.string().describe('The arrival city or airport code.'),
     departureDate: z.string().date().describe('The departure date (YYYY-MM-DD).'), // Use .date() for validation
-    numberOfPassengers: z.number().int().positive().describe('The number of passengers (must be a positive integer).'), // Add validation
+    numberOfPassengers: z.number().int().describe('The number of passengers (must be a positive integer).'), // Add validation later
 });
 
 const flightSearchPrompt = ai.definePrompt({
@@ -58,7 +59,7 @@ const flightSearchPrompt = ai.definePrompt({
 
   Prompt: {{{prompt}}}
 
-  Return ONLY the structured JSON output conforming to the required schema. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'departureCity' field and set date/passengers appropriately to indicate failure.`,
+  Return ONLY the structured JSON output conforming to the required schema. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'departureCity' field and set date/passengers appropriately to indicate failure (e.g., use 0 for passengers if not found).`,
 });
 
 
@@ -86,14 +87,21 @@ const findAndBookFlightsFlow = ai.defineFlow<
         if (extractedCriteria.departureCity?.includes('issue')) {
             throw new Error(`AI Processing Error: ${extractedCriteria.departureCity}`);
         }
+        // Parse with the original schema first
         searchCriteria = FlightSearchCriteriaSchema.parse(extractedCriteria);
+
+        // Add post-extraction validation for numberOfPassengers
+        if (searchCriteria.numberOfPassengers <= 0) {
+            throw new Error("Number of passengers must be a positive number.");
+        }
+
         console.log("Extracted Flight Search Criteria:", searchCriteria);
     } catch (error: any) {
         console.error("LLM provided invalid flight search criteria:", error);
         if (error instanceof z.ZodError) {
             throw new Error(`AI provided invalid search criteria: ${error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ')}`);
         }
-        // Use the error message if it came from the failure check above
+        // Use the error message if it came from the failure check or post-validation
         throw new Error(error.message || "AI failed to extract valid flight search criteria.");
     }
 

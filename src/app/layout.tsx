@@ -3,10 +3,8 @@ import { Inter } from "next/font/google";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import AppSidebar from "@/components/layout/sidebar";
-import AppHeader from "@/components/layout/header";
 import { Toaster } from "@/components/ui/toaster";
+import { AuthProvider } from "@/contexts/auth-context"; // Import AuthProvider
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,16 +35,11 @@ export default function RootLayout({
           geistMono.variable
         )}
       >
-        <SidebarProvider defaultOpen>
-          <AppSidebar />
-          <div className="flex flex-col flex-1">
-             <AppHeader />
-             <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                {children}
-             </main>
-          </div>
+        {/* Wrap the entire application with AuthProvider */}
+        <AuthProvider>
+          {children}
           <Toaster />
-        </SidebarProvider>
+        </AuthProvider>
       </body>
     </html>
   );

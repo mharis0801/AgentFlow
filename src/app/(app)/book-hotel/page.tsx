@@ -4,7 +4,7 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { setupMeetingFromPrompt, SetupMeetingFromPromptOutput } from "@/ai/flows/setup-meeting-from-prompt";
+import { bookHotelReservationFromPrompt, BookHotelReservationFromPromptOutput } from "@/ai/flows/book-hotel-reservation-from-prompt";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -18,18 +18,18 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, CalendarCheck } from "lucide-react";
+import { Loader2, BedDouble } from "lucide-react";
 
 const FormSchema = z.object({
   prompt: z.string().min(10, {
-    message: "Meeting request must be at least 10 characters.",
+    message: "Hotel request must be at least 10 characters.",
   }),
 });
 
-export default function SetupMeetingPage() {
+export default function BookHotelPage() {
   const { toast } = useToast();
   const [isLoading, setIsLoading] = React.useState(false);
-  const [result, setResult] = React.useState<SetupMeetingFromPromptOutput | null>(null);
+  const [result, setResult] = React.useState<BookHotelReservationFromPromptOutput | null>(null);
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
@@ -42,27 +42,26 @@ export default function SetupMeetingPage() {
     setIsLoading(true);
     setResult(null);
     try {
-      const response = await setupMeetingFromPrompt({ prompt: data.prompt });
+      const response = await bookHotelReservationFromPrompt({ prompt: data.prompt });
       setResult(response);
       toast({
-        title: "Meeting Setup Processed",
-        description: response.confirmationMessage,
+        title: "Hotel Booking Processed",
+        description: `Successfully booked ${response.hotelName}. Confirmation: ${response.confirmationNumber}`,
       });
     } catch (error: any) {
-      console.error("Error setting up meeting:", error);
-      // Attempt to parse a potential JSON error response from Genkit
-      let errorMessage = "Failed to set up meeting. Please try again.";
-      try {
-         if (error?.message) {
-           const parsedError = JSON.parse(error.message);
-           if (parsedError?.message) {
-             errorMessage = parsedError.message;
-           }
-         }
-      } catch (parseError) {
-         // Ignore if parsing fails, use default message
-      }
-
+      console.error("Error booking hotel:", error);
+       let errorMessage = "Failed to book hotel. Please try again.";
+       try {
+          if (error?.message) {
+            // Genkit might wrap errors in JSON strings
+            const parsedError = JSON.parse(error.message);
+             if (parsedError?.message) {
+              errorMessage = parsedError.message;
+             }
+          }
+       } catch (parseError) {
+          // Ignore parsing errors
+       }
       toast({
         title: "Error",
         description: errorMessage,
@@ -75,14 +74,14 @@ export default function SetupMeetingPage() {
 
   return (
     <div className="container mx-auto py-8">
-      <h1 className="text-3xl font-bold mb-6 text-foreground">Setup a Meeting</h1>
+      <h1 className="text-3xl font-bold mb-6 text-foreground">Book a Hotel</h1>
 
-      <Card className="max-w-2xl mx-auto shadow-md">
+      <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
-          <CardTitle>AI Meeting Scheduler</CardTitle>
+          <CardTitle>AI Hotel Booker</CardTitle>
           <CardDescription>
-            Describe the meeting you want to set up. Include participants (email addresses), proposed time/date, duration, title, and optionally an agenda or location.
-            Example: "Set up a 30-minute meeting with jane.smith@example.com and bob@example.com for next Tuesday at 2 PM EST titled 'Project Kickoff'. Agenda: Discuss project goals."
+            Describe the hotel you need. Include the city, check-in/check-out dates, number of guests, and any preferences (e.g., star rating, amenities).
+            Example: "Book a 4-star hotel in New York City from October 10th to October 15th for 2 adults. Prefer a hotel near Times Square with a gym."
           </CardDescription>
         </CardHeader>
         <Form {...form}>
@@ -93,17 +92,17 @@ export default function SetupMeetingPage() {
                 name="prompt"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Your Meeting Request</FormLabel>
+                    <FormLabel>Your Hotel Request</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="e.g., Schedule a meeting with marketing@example.com..."
+                        placeholder="e.g., Find me a hotel in Paris for 3 nights next month..."
                         className="resize-none min-h-[150px]"
                         {...field}
                         disabled={isLoading}
                       />
                     </FormControl>
                     <FormDescription>
-                      Be specific about attendees, time, date, duration, and title.
+                      Be specific about location, dates, guests, and preferences.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -115,10 +114,10 @@ export default function SetupMeetingPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing...
+                    Booking...
                   </>
                 ) : (
-                  "Setup Meeting"
+                  "Book Hotel"
                 )}
               </Button>
             </CardFooter>
@@ -127,20 +126,15 @@ export default function SetupMeetingPage() {
       </Card>
 
        {result && (
-         <Card className="max-w-2xl mx-auto mt-8 shadow-md">
+         <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
            <CardHeader>
              <CardTitle className="flex items-center gap-2">
-               <CalendarCheck className="h-5 w-5 text-green-600" /> Meeting Details
+               <BedDouble className="h-5 w-5 text-green-600" /> Booking Confirmation
              </CardTitle>
-             <CardDescription>{result.confirmationMessage}</CardDescription>
            </CardHeader>
            <CardContent className="space-y-2 text-sm">
-             <p><strong>Title:</strong> {result.meetingDetails.title}</p>
-             <p><strong>Attendees:</strong> {result.meetingDetails.attendees.join(', ')}</p>
-             <p><strong>Starts:</strong> {new Date(result.meetingDetails.startTime).toLocaleString()}</p>
-             <p><strong>Ends:</strong> {new Date(result.meetingDetails.endTime).toLocaleString()}</p>
-             {result.meetingDetails.location && <p><strong>Location:</strong> {result.meetingDetails.location}</p>}
-             {result.meetingDetails.agenda && <p><strong>Agenda:</strong> {result.meetingDetails.agenda}</p>}
+             <p><strong>Hotel Name:</strong> {result.hotelName}</p>
+             <p><strong>Confirmation Number:</strong> <span className="font-mono bg-muted px-2 py-1 rounded">{result.confirmationNumber}</span></p>
            </CardContent>
          </Card>
        )}

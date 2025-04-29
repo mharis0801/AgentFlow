@@ -18,7 +18,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
+import { Loader2, MailCheck } from "lucide-react";
 
 const FormSchema = z.object({
   prompt: z.string().min(10, {
@@ -49,11 +49,22 @@ export default function ScheduleEmailPage() {
         description: response.details,
         variant: response.success ? "default" : "destructive",
       });
-    } catch (error) {
-      console.error("Error scheduling email:", error);
+    } catch (error: any) {
+       console.error("Error scheduling email:", error);
+       let errorMessage = "Failed to schedule email. Please try again.";
+        try {
+          if (error?.message) {
+             const parsedError = JSON.parse(error.message);
+             if (parsedError?.message) {
+               errorMessage = parsedError.message;
+             }
+           }
+        } catch (parseError) {
+          // Ignore parsing error
+        }
       toast({
         title: "Error",
-        description: "Failed to schedule email. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -65,7 +76,7 @@ export default function ScheduleEmailPage() {
     <div className="container mx-auto py-8">
       <h1 className="text-3xl font-bold mb-6 text-foreground">Schedule an Email</h1>
 
-      <Card className="max-w-2xl mx-auto shadow-md">
+      <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
           <CardTitle>AI Email Scheduler</CardTitle>
           <CardDescription>
@@ -115,15 +126,18 @@ export default function ScheduleEmailPage() {
       </Card>
 
       {result && (
-        <Card className="max-w-2xl mx-auto mt-8 shadow-md">
+        <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
           <CardHeader>
-            <CardTitle>Scheduling Result</CardTitle>
+             <CardTitle className="flex items-center gap-2">
+               <MailCheck className={`h-5 w-5 ${result.success ? 'text-green-600' : 'text-destructive'}`} />
+                Scheduling Result
+             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className={result.success ? "text-green-600" : "text-red-600"}>
+            <p className={result.success ? "text-green-600 font-medium" : "text-destructive font-medium"}>
               Status: {result.success ? "Successfully Scheduled" : "Failed to Schedule"}
             </p>
-            <p className="mt-2 text-muted-foreground">Details: {result.details}</p>
+            <p className="mt-2 text-muted-foreground text-sm">Details: {result.details}</p>
           </CardContent>
         </Card>
       )}

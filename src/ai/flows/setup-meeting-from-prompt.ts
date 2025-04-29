@@ -1,30 +1,39 @@
 'use server';
 /**
  * @fileOverview A meeting setup AI agent.
+ * Uses tools to potentially read email requests and send calendar invites (via email).
  *
  * - setupMeetingFromPrompt - A function that handles the meeting setup process.
  * - SetupMeetingFromPromptInput - The input type for the setupMeetingFromPrompt function.
  * - SetupMeetingFromPromptOutput - The return type for the setupMeetingFromPrompt function.
  */
 
-import {ai} from '@/ai/ai-instance';
-import {z} from 'genkit';
+import { ai } from '@/ai/ai-instance';
+import { z } from 'genkit';
+import { sendEmailTool } from '@/ai/tools/send-email'; // To send invites
+import { auth } from '@/lib/firebase/firebase'; // Import the initialized auth instance
+// import { readEmailsTool } from '@/ai/tools/email-reader'; // Potential future use
 
+// Input still takes a direct prompt
 const SetupMeetingFromPromptInputSchema = z.object({
-  prompt: z.string().describe('A prompt describing the meeting request.'),
+  prompt: z.string().describe('A prompt describing the meeting request (e.g., participants, time, topic).'),
 });
 export type SetupMeetingFromPromptInput = z.infer<typeof SetupMeetingFromPromptInputSchema>;
 
-const SetupMeetingFromPromptOutputSchema = z.object({
-  meetingDetails: z.object({
+const MeetingDetailsSchema = z.object({
     title: z.string().describe('The title of the meeting.'),
     attendees: z.array(z.string().email()).describe('The email addresses of the attendees.'),
-    startTime: z.string().datetime().describe('The start time of the meeting in ISO format.'),
-    endTime: z.string().datetime().describe('The end time of the meeting in ISO format.'),
-    location: z.string().optional().describe('The location of the meeting, if any.'),
-    agenda: z.string().optional().describe('A brief agenda for the meeting, if any.'),
-  }).describe('Details about the scheduled meeting'),
-  confirmationMessage: z.string().describe('A confirmation message to display to the user.'),
+    startTime: z.string().datetime().describe('The start time of the meeting in ISO format (UTC).'),
+    endTime: z.string().datetime().describe('The end time of the meeting in ISO format (UTC).'),
+    location: z.string().optional().describe('The location/link for the meeting (e.g., Google Meet link, physical address).'),
+    agenda: z.string().optional().describe('A brief agenda or description for the meeting.'),
+});
+
+// Output includes the meeting details and confirmation
+const SetupMeetingFromPromptOutputSchema = z.object({
+  meetingDetails: MeetingDetailsSchema.describe('Details of the scheduled meeting.'),
+  confirmationMessage: z.string().describe('A confirmation message summarizing the action taken (e.g., invites sent).'),
+  inviteSent: z.boolean().describe('Indicates if the simulated invitation email was sent.'),
 });
 export type SetupMeetingFromPromptOutput = z.infer<typeof SetupMeetingFromPromptOutputSchema>;
 
@@ -32,36 +41,33 @@ export async function setupMeetingFromPrompt(input: SetupMeetingFromPromptInput)
   return setupMeetingFromPromptFlow(input);
 }
 
-const prompt = ai.definePrompt({
-  name: 'setupMeetingFromPromptPrompt',
+// The prompt now focuses on extracting details and deciding *if* an invite needs sending.
+const meetingSetupPrompt = ai.definePrompt({
+  name: 'meetingSetupPrompt',
+  // Provide the sendEmailTool for sending invites
+  tools: [sendEmailTool],
   input: {
     schema: z.object({
       prompt: z.string().describe('A prompt describing the meeting request.'),
+      // Could add user preferences (e.g., default calendar) here if needed
+      currentUserEmail: z.string().email().describe('The email of the user making the request (organizer).'),
     }),
   },
   output: {
-    schema: z.object({
-      meetingDetails: z.object({
-        title: z.string().describe('The title of the meeting.'),
-        attendees: z.array(z.string().email()).describe('The email addresses of the attendees.'),
-        startTime: z.string().datetime().describe('The start time of the meeting in ISO format.'),
-        endTime: z.string().datetime().describe('The end time of the meeting in ISO format.'),
-        location: z.string().optional().describe('The location of the meeting, if any.'),
-        agenda: z.string().optional().describe('A brief agenda for the meeting, if any.'),
-      }).describe('Details about the scheduled meeting'),
-      confirmationMessage: z.string().describe('A confirmation message to display to the user.'),
-    }),
+    // Output schema focuses on the *parsed* meeting details.
+    schema: MeetingDetailsSchema,
   },
-  prompt: `You are an AI assistant tasked with scheduling meetings based on user prompts. Please extract the necessary information from the prompt to schedule the meeting and provide a confirmation message to the user. The output should be in JSON format.
+  prompt: `You are an AI assistant tasked with scheduling meetings based on user prompts.
+  Your goal is to extract the meeting details (title, attendees, start/end times, location, agenda) from the prompt.
+  Ensure times are converted to UTC ISO format. The user making the request is {{currentUserEmail}}. Include them as an attendee unless explicitly told not to.
 
-Prompt: {{{prompt}}}
+  Prompt: {{{prompt}}}
 
-Consider these requirements:
-* Ensure that all email addresses are valid.
-* The start time must be before the end time.
-* All times are Eastern Standard Time.
+  After extracting the details, determine if a calendar invitation should be sent to the attendees using the sendEmailTool.
+  The tool input should include all attendees in the 'to' field (comma-separated if the tool supports it, otherwise call per attendee - assume comma separated for now),
+  a subject like "Meeting Invitation: [Meeting Title]", and a body summarizing the meeting details (attendees, time, location, agenda).
 
-Output:`, 
+  Return ONLY the extracted meeting details as a JSON object conforming to the output schema. The flow will handle calling the tool based on your decision.`,
 });
 
 const setupMeetingFromPromptFlow = ai.defineFlow<
@@ -73,8 +79,98 @@ const setupMeetingFromPromptFlow = ai.defineFlow<
     inputSchema: SetupMeetingFromPromptInputSchema,
     outputSchema: SetupMeetingFromPromptOutputSchema,
   },
-  async input => {
-    const {output} = await prompt(input);
-    return output!;
+  async (input) => {
+    // Get current user's email from Firebase Auth context
+    const currentUser = auth.currentUser;
+    if (!currentUser || !currentUser.email) {
+      // This case should ideally be handled by ProtectedRoute, but adding a check here.
+      throw new Error('User is not authenticated or email is unavailable.');
+    }
+    const currentUserEmail = currentUser.email;
+
+    // 1. Run the prompt to extract meeting details
+    const llmResponse = await meetingSetupPrompt({
+        prompt: input.prompt,
+        currentUserEmail: currentUserEmail,
+     });
+    const meetingDetails = llmResponse.output;
+
+    if (!meetingDetails) {
+      throw new Error('LLM failed to extract meeting details from the prompt.');
+    }
+
+    // Ensure the organizer is included if not already present
+    if (!meetingDetails.attendees.includes(currentUserEmail)) {
+       meetingDetails.attendees.push(currentUserEmail);
+    }
+
+    // 2. Check if the LLM decided to use the sendEmailTool for invites
+    const toolRequest = llmResponse.toolRequests(sendEmailTool.name)[0];
+    let inviteSent = false;
+    let confirmationMessage = `Meeting details extracted for "${meetingDetails.title}".`;
+
+    if (toolRequest) {
+      console.log('LLM requested sending an invite. Executing sendEmailTool with:', toolRequest.input);
+      try {
+         // Re-construct the tool input based on extracted details for robustness
+         // (or trust the LLM's generated input if simple enough)
+         const inviteSubject = `Meeting Invitation: ${meetingDetails.title}`;
+         const inviteBody = `
+           <p>You are invited to the following meeting:</p>
+           <p><b>Title:</b> ${meetingDetails.title}</p>
+           <p><b>When:</b> ${new Date(meetingDetails.startTime).toLocaleString()} - ${new Date(meetingDetails.endTime).toLocaleString()} (UTC)</p>
+           <p><b>Attendees:</b> ${meetingDetails.attendees.join(', ')}</p>
+           ${meetingDetails.location ? `<p><b>Location:</b> ${meetingDetails.location}</p>` : ''}
+           ${meetingDetails.agenda ? `<p><b>Agenda:</b> ${meetingDetails.agenda}</p>` : ''}
+           <p>---<br>Scheduled by AgentFlow</p>
+         `;
+
+         // Ensure the tool input is correctly formatted based on sendEmailTool's inputSchema
+         const toolInputPayload = {
+             to: meetingDetails.attendees.join(','), // Assuming the tool handles comma-separated list
+             subject: inviteSubject,
+             body: inviteBody,
+         };
+
+         // Validate toolInputPayload against sendEmailTool's inputSchema (optional but recommended)
+         try {
+            sendEmailTool.inputSchema.parse(toolInputPayload);
+         } catch (validationError) {
+            console.error("Tool input validation failed:", validationError);
+            throw new Error("Failed to construct valid input for sendEmailTool.");
+         }
+
+
+         const toolOutput = await sendEmailTool(toolInputPayload);
+
+         if (toolOutput.success) {
+           inviteSent = true;
+           confirmationMessage = `Meeting "${meetingDetails.title}" details extracted and invitation sent to ${meetingDetails.attendees.length} attendees.`;
+           console.log('Simulated meeting invitation sent successfully.');
+         } else {
+           confirmationMessage = `Meeting "${meetingDetails.title}" details extracted, but failed to send invitation email.`;
+           console.error('Failed to send simulated meeting invitation.');
+         }
+      } catch(toolError) {
+         console.error("Error executing sendEmailTool for meeting invite:", toolError);
+         confirmationMessage = `Meeting "${meetingDetails.title}" details extracted, but encountered an error sending the invitation.`;
+      }
+
+    } else {
+      console.log('LLM did not request sending an invite for this meeting setup.');
+      // You might still want to save the meeting to a user's calendar here
+      // using a different tool or service call.
+      confirmationMessage = `Meeting "${meetingDetails.title}" details extracted. No invite requested by AI.`;
+    }
+
+    // 3. Return the final result including meeting details and confirmation
+    // TODO: Integrate with a real calendar API (Google Calendar, Outlook Calendar)
+    // to create the actual event instead of just sending an email.
+
+    return {
+      meetingDetails: meetingDetails,
+      confirmationMessage: confirmationMessage,
+      inviteSent: inviteSent,
+    };
   }
 );

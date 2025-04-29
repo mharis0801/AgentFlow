@@ -74,8 +74,6 @@ export default function BookFlightPage() {
   }
 
   const formatTime = (timeString: string) => {
-    // Basic time formatting, assuming HH:MM input
-    // You might need a more robust date/time library like date-fns for complex cases
      try {
         const [hours, minutes] = timeString.split(':');
         const date = new Date();
@@ -92,7 +90,7 @@ export default function BookFlightPage() {
     <div className="container mx-auto py-8">
       <h1 className="text-3xl font-bold mb-6 text-foreground">Find & Book Flights</h1>
 
-      <Card className="max-w-2xl mx-auto shadow-md">
+      <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
           <CardTitle>AI Flight Booker</CardTitle>
           <CardDescription>
@@ -142,7 +140,7 @@ export default function BookFlightPage() {
       </Card>
 
       {result && (
-        <Card className="max-w-2xl mx-auto mt-8 shadow-md">
+        <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
                <CheckCircle className="h-5 w-5 text-green-600" /> Booking Result
@@ -156,7 +154,7 @@ export default function BookFlightPage() {
                 {result.flights.map((flight: Flight, index: number) => (
                   <li key={index} className="p-3 border rounded-md bg-muted/50 text-sm">
                     <div className="flex justify-between items-center font-medium mb-1">
-                      <span>{flight.departureAirport} ✈️ {flight.arrivalAirport}</span>
+                      <span>{flight.departureAirport} <PlaneTakeoff className="inline h-4 w-4 mx-1 text-primary"/> {flight.arrivalAirport}</span>
                       <span className="font-mono text-primary">{flight.flightNumber}</span>
                     </div>
                     <div className="text-muted-foreground">

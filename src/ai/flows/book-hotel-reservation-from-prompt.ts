@@ -9,7 +9,7 @@
 
 import {ai} from '@/ai/ai-instance';
 import {z} from 'genkit';
-import {findHotels, Hotel, HotelSearchCriteria} from '@/services/hotel-booking'; // Corrected import path
+import {findHotels, Hotel, HotelSearchCriteria} from '@/services/hotel-booking';
 
 const BookHotelReservationFromPromptInputSchema = z.object({
   prompt: z.string().describe('A prompt describing the desired hotel reservation, including destination, dates, and preferences.'),
@@ -26,46 +26,30 @@ export async function bookHotelReservationFromPrompt(input: BookHotelReservation
   return bookHotelReservationFromPromptFlow(input);
 }
 
-// Simplified Tool: Directly extract criteria needed for the next step.
-// The LLM's primary role here is extraction based on the prompt.
-const extractHotelSearchCriteriaTool = ai.defineTool({
-  name: 'extractHotelSearchCriteria',
-  description: 'Extracts key hotel search criteria (city, check-in/out dates, guests) from a user prompt.',
-  inputSchema: z.object({
-    prompt: z.string().describe('The user prompt to extract criteria from.'),
-  }),
-  outputSchema: z.object({
+// Define the expected output schema for the LLM, based on the HotelSearchCriteria
+const HotelSearchCriteriaSchema = z.object({
     city: z.string().describe('The city where the hotel is located.'),
-    checkInDate: z.string().date().describe('The check-in date (YYYY-MM-DD).'), // Use .date() for validation
-    checkOutDate: z.string().date().describe('The check-out date (YYYY-MM-DD).'), // Use .date() for validation
-    numberOfGuests: z.number().int().positive().describe('The number of guests (must be a positive integer).'), // Add validation
-  }),
-},
-async (input) => {
-  // This tool is primarily for schema definition to guide the LLM output format.
-  // It's not expected to be called directly in this flow version.
-  throw new Error("This tool's implementation should not be called in this flow; its schema guides the LLM.");
+    checkInDate: z.string().date().describe('The check-in date (YYYY-MM-DD).'),
+    checkOutDate: z.string().date().describe('The check-out date (YYYY-MM-DD).'),
+    numberOfGuests: z.number().int().positive().describe('The number of guests (must be a positive integer).'),
 });
 
 
 const bookHotelPrompt = ai.definePrompt({
   name: 'bookHotelPrompt',
-  // Provide the tool schema for the LLM to understand the desired output format.
-  // Although we don't check toolRequests anymore, defining it here helps guide the LLM.
-  tools: [extractHotelSearchCriteriaTool],
   input: {
     schema: BookHotelReservationFromPromptInputSchema,
   },
   output: {
-    // The prompt's direct output is the structured search criteria.
-    schema: extractHotelSearchCriteriaTool.outputSchema,
+    // The prompt's direct output should be the structured search criteria.
+    schema: HotelSearchCriteriaSchema,
   },
   prompt: `You are a hotel booking assistant. Your task is to extract the hotel search criteria from the following user prompt.
 
   Prompt: {{{prompt}}}
 
   Ensure you accurately extract the city, check-in date (YYYY-MM-DD), check-out date (YYYY-MM-DD), and the number of guests.
-  Return ONLY the structured JSON output required by the extractHotelSearchCriteria tool's output schema. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'city' field and set dates/guests appropriately to indicate failure (e.g., use "Invalid date" or 0 for guests).`,
+  Return ONLY the structured JSON output conforming to the schema. Do not add any extra commentary. If you cannot extract all required fields, explain the issue in the 'city' field and set dates/guests appropriately to indicate failure (e.g., use "Invalid date" or 0 for guests).`,
 });
 
 
@@ -87,27 +71,42 @@ async (input) => {
       throw new Error('AI failed to process the request. No hotel criteria were generated.');
   }
 
+  // Ensure extractedCriteria is an object before trying to parse or access properties
+  if (typeof extractedCriteria !== 'object' || extractedCriteria === null) {
+      console.error("LLM output was not a valid object:", extractedCriteria);
+      throw new Error('AI response was not in the expected format (expected an object).');
+  }
+
   let searchCriteria: HotelSearchCriteria;
   try {
      // Check for failure indication from the prompt itself (e.g., in the city field)
-     if (extractedCriteria.city?.toLowerCase().includes('issue') || extractedCriteria.city?.toLowerCase().includes('invalid') || extractedCriteria.city?.toLowerCase().includes('fail')) {
+     // Use optional chaining just in case the fields aren't present
+     const city = extractedCriteria?.city?.toLowerCase();
+     const checkIn = extractedCriteria?.checkInDate?.toLowerCase();
+     const checkOut = extractedCriteria?.checkOutDate?.toLowerCase();
+     const guests = extractedCriteria?.numberOfGuests;
+
+     if (city?.includes('issue') || city?.includes('invalid') || city?.includes('fail')) {
        throw new Error(`AI Processing Error: ${extractedCriteria.city}`);
      }
      // Check for potentially invalid dates/guests as per prompt instructions
-     if (extractedCriteria.checkInDate?.toLowerCase().includes('invalid') || extractedCriteria.checkOutDate?.toLowerCase().includes('invalid') || extractedCriteria.numberOfGuests === 0) {
+     if (checkIn?.includes('invalid') || checkOut?.includes('invalid') || guests === 0) {
         throw new Error('AI could not extract valid dates or number of guests.');
      }
 
-    // Validate the structure using the tool's *output* schema, as the prompt aims to produce this.
-    searchCriteria = extractHotelSearchCriteriaTool.outputSchema.parse(extractedCriteria);
+    // Validate the structure using the defined HotelSearchCriteriaSchema.
+    searchCriteria = HotelSearchCriteriaSchema.parse(extractedCriteria);
     console.log("Extracted Search Criteria:", searchCriteria);
   } catch (error: any) {
-    console.error("LLM provided invalid search criteria:", error);
+    console.error("LLM provided invalid search criteria:", error); // Log the full error object
     if (error instanceof z.ZodError) {
-        throw new Error(`AI provided invalid search criteria: ${error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ')}`);
+        // Format Zod errors for clarity
+        const formattedErrors = error.errors.map(e => `${e.path.join('.')} - ${e.message}`).join(', ');
+        throw new Error(`AI provided invalid search criteria: ${formattedErrors}`);
     }
-    // Use the error message if it came from the checks above or parsing
-    throw new Error(error.message || "AI failed to extract valid search criteria.");
+    // Improved fallback for other error types
+    const errorMessage = error?.message || JSON.stringify(error) || 'Unknown error during criteria validation.';
+    throw new Error(`AI failed to extract valid search criteria: ${errorMessage}`);
   }
 
   // 3. Find available hotels (using the mock service for now).

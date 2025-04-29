@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, MailCheck } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context"; // Import useAuth
 
 const FormSchema = z.object({
   prompt: z.string().min(10, {
@@ -28,6 +29,7 @@ const FormSchema = z.object({
 
 export default function ScheduleEmailPage() {
   const { toast } = useToast();
+  const { user } = useAuth(); // Get user from auth context
   const [isLoading, setIsLoading] = React.useState(false);
   const [result, setResult] = React.useState<ScheduleEmailFromPromptOutput | null>(null);
 
@@ -39,13 +41,26 @@ export default function ScheduleEmailPage() {
   });
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
+     if (!user) {
+       toast({
+         title: "Authentication Error",
+         description: "You must be signed in to schedule an email.",
+         variant: "destructive",
+       });
+       return;
+     }
+
     setIsLoading(true);
     setResult(null); // Clear previous results
     try {
-      const response = await scheduleEmailFromPrompt({ prompt: data.prompt });
+      // Pass the user's UID to the flow
+      const response = await scheduleEmailFromPrompt({
+        prompt: data.prompt,
+        userId: user.uid,
+      });
       setResult(response);
       toast({
-        title: response.success ? "Email Scheduled!" : "Scheduling Failed",
+        title: response.success ? "Email Request Processed" : "Processing Failed",
         description: response.details,
         variant: response.success ? "default" : "destructive",
       });
@@ -119,11 +134,11 @@ export default function ScheduleEmailPage() {
               />
             </CardContent>
             <CardFooter className="flex justify-end">
-              <Button type="submit" disabled={isLoading} className="bg-primary hover:bg-primary/90">
+              <Button type="submit" disabled={isLoading || !user} className="bg-primary hover:bg-primary/90">
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Scheduling...
+                    Processing...
                   </>
                 ) : (
                   "Schedule Email"
@@ -139,17 +154,20 @@ export default function ScheduleEmailPage() {
           <CardHeader>
              <CardTitle className="flex items-center gap-2">
                <MailCheck className={`h-5 w-5 ${result.success ? 'text-green-600' : 'text-destructive'}`} />
-                Scheduling Result
+                Processing Result
              </CardTitle>
           </CardHeader>
           <CardContent>
             <p className={result.success ? "text-green-600 font-medium" : "text-destructive font-medium"}>
-              Status: {result.success ? "Successfully Scheduled" : "Failed to Schedule"}
+              Status: {result.success ? "Successfully Processed" : "Failed to Process"}
             </p>
             <p className="mt-2 text-muted-foreground text-sm">Details: {result.details}</p>
             {result.messageId && result.success && (
                <p className="mt-1 text-xs text-muted-foreground">Message ID: {result.messageId}</p>
             )}
+             {result.taskId && (
+                 <p className="mt-1 text-xs text-muted-foreground">Task ID: {result.taskId}</p>
+             )}
           </CardContent>
         </Card>
       )}

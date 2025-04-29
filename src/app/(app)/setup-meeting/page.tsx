@@ -41,7 +41,8 @@ export default function SetupMeetingPage() {
   });
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
-    if (!user?.email) {
+     // Ensure user and user.email are available
+    if (!user || !user.email || !user.uid) {
       toast({
         title: "Authentication Error",
         description: "Could not identify the current user. Please sign in again.",
@@ -53,15 +54,18 @@ export default function SetupMeetingPage() {
     setIsLoading(true);
     setResult(null);
     try {
-      // Pass the current user's email to the flow
+      // Pass the current user's email AND UID to the flow
       const response = await setupMeetingFromPrompt({
         prompt: data.prompt,
         currentUserEmail: user.email,
+        userId: user.uid, // Pass the UID
       });
       setResult(response);
       toast({
         title: "Meeting Setup Processed",
         description: response.confirmationMessage,
+        // Optionally use success/failure from response if available
+        variant: response.inviteSent || response.confirmationMessage.includes("extracted") ? "default" : "destructive",
       });
     } catch (error: any) {
       console.error("Error setting up meeting:", error);
@@ -95,6 +99,21 @@ export default function SetupMeetingPage() {
       setIsLoading(false);
     }
   }
+
+   // Helper to format ISO date string or potentially other formats
+   const formatDate = (dateString: string | undefined): string => {
+       if (!dateString) return 'N/A';
+       try {
+           const date = new Date(dateString);
+           if (isNaN(date.getTime())) return dateString; // Return original if invalid
+           return date.toLocaleString(undefined, {
+               dateStyle: 'medium', // e.g., Oct 10, 2023
+               timeStyle: 'short', // e.g., 2:00 PM
+           });
+       } catch {
+           return dateString; // Fallback
+       }
+   };
 
   return (
     <div className="container mx-auto py-8">
@@ -160,11 +179,14 @@ export default function SetupMeetingPage() {
            <CardContent className="space-y-2 text-sm">
              <p><strong>Title:</strong> {result.meetingDetails.title}</p>
              <p><strong>Attendees:</strong> {result.meetingDetails.attendees.join(', ')}</p>
-             <p><strong>Starts:</strong> {new Date(result.meetingDetails.startTime).toLocaleString()}</p>
-             <p><strong>Ends:</strong> {new Date(result.meetingDetails.endTime).toLocaleString()}</p>
+             <p><strong>Starts:</strong> {formatDate(result.meetingDetails.startTime)}</p>
+             <p><strong>Ends:</strong> {formatDate(result.meetingDetails.endTime)}</p>
              {result.meetingDetails.location && <p><strong>Location:</strong> {result.meetingDetails.location}</p>}
              {result.meetingDetails.agenda && <p><strong>Agenda:</strong> {result.meetingDetails.agenda}</p>}
              <p><strong>Invite Sent:</strong> {result.inviteSent ? 'Yes' : 'No'}</p>
+              {result.taskId && (
+                   <p className="mt-1 text-xs text-muted-foreground">Task ID: {result.taskId}</p>
+              )}
            </CardContent>
          </Card>
        )}

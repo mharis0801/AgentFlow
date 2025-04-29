@@ -5,9 +5,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { format } from "date-fns";
-import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle } from "lucide-react";
+import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle, Building, Clock, Ticket, Users, DollarSign, AlertCircle } from "lucide-react";
 
-import { findAndBookFlights, FindAndBookFlightsOutput } from "@/ai/flows/find-and-book-flights"; // Renamed import
+import { findAndBookFlights, FindAndBookFlightsOutput } from "@/ai/flows/find-and-book-flights";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -24,7 +24,6 @@ import { Calendar } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/auth-context";
-import { Flight } from "@/services/flight-booking";
 import { cn } from "@/lib/utils";
 
 // Zod schema for form validation on the client-side
@@ -35,6 +34,7 @@ const FormSchema = z.object({
   numberOfPassengers: z.coerce.number().int().positive({ message: "Number of passengers must be a positive number." }),
 });
 
+// Combine output type with task ID
 type FlightBookingResult = FindAndBookFlightsOutput & {
     taskId?: string;
 };
@@ -44,6 +44,7 @@ export default function BookFlightPage() {
   const { user } = useAuth();
   const [isLoading, setIsLoading] = React.useState(false);
   const [result, setResult] = React.useState<FlightBookingResult | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
@@ -67,6 +68,7 @@ export default function BookFlightPage() {
 
     setIsLoading(true);
     setResult(null);
+    setError(null); // Clear previous errors
     try {
         // Format date to YYYY-MM-DD string before sending
         const inputData = {
@@ -79,14 +81,16 @@ export default function BookFlightPage() {
       const response = await findAndBookFlights(inputData);
       setResult(response);
       toast({
-        title: "Flight Booking Processed",
-        description: response.bookingConfirmation,
+        title: "Flight Booking Successful",
+        description: response.bookingMessage,
       });
     } catch (error: any) {
       console.error("Error booking flight:", error);
+      const errorMessage = error.message || "Failed to book flight. Please try again.";
+      setError(errorMessage); // Set error state
       toast({
-        title: "Error",
-        description: error.message || "Failed to book flight. Please try again.",
+        title: "Flight Booking Failed",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -94,19 +98,26 @@ export default function BookFlightPage() {
     }
   }
 
-  const formatTime = (timeString: string) => {
-     try {
-        if (!/^\d{1,2}:\d{2}$/.test(timeString)) return timeString;
-        const [hours, minutes] = timeString.split(':');
-        const date = new Date();
-        date.setHours(parseInt(hours, 10));
-        date.setMinutes(parseInt(minutes, 10));
-        if (isNaN(date.getTime())) return timeString;
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-     } catch {
-        return timeString;
-     }
-  };
+  // Format ISO string to readable date and time
+   const formatDisplayDateTime = (dateTimeString: string | undefined): string => {
+       if (!dateTimeString) return 'N/A';
+       try {
+           const date = new Date(dateTimeString);
+           if (isNaN(date.getTime())) return dateTimeString; // Fallback
+           // Format as Oct 10, 2024, 9:00 AM (local time)
+           return format(date, "PPp");
+       } catch {
+           return dateTimeString; // Fallback
+       }
+   };
+
+   // Format duration in minutes to hours and minutes string
+   const formatDuration = (minutes: number | undefined): string => {
+     if (minutes === undefined || minutes < 0) return 'N/A';
+     const hours = Math.floor(minutes / 60);
+     const mins = minutes % 60;
+     return `${hours}h ${mins}m`;
+   };
 
   return (
     <div className="container mx-auto py-8">
@@ -165,17 +176,17 @@ export default function BookFlightPage() {
                           <Button
                             variant={"outline"}
                             className={cn(
-                              "w-full pl-3 text-left font-normal",
+                              "w-full justify-start text-left font-normal",
                               !field.value && "text-muted-foreground"
                             )}
                             disabled={isLoading}
                           >
+                            <CalendarIcon className="mr-2 h-4 w-4" />
                             {field.value ? (
                               format(field.value, "PPP") // Display format
                             ) : (
                               <span>Pick a date</span>
                             )}
-                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
                           </Button>
                         </FormControl>
                       </PopoverTrigger>
@@ -219,7 +230,9 @@ export default function BookFlightPage() {
                     Searching & Booking...
                   </>
                 ) : (
-                  "Find & Book Flight"
+                   <>
+                     <PlaneTakeoff className="mr-2 h-4 w-4"/> Find & Book Flight
+                   </>
                 )}
               </Button>
             </CardFooter>
@@ -227,35 +240,72 @@ export default function BookFlightPage() {
         </Form>
       </Card>
 
-      {result && (
+      {error && !isLoading && (
+          <Card className="max-w-2xl mx-auto mt-8 shadow-md border-destructive/50 bg-destructive/10">
+              <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-destructive">
+                      <AlertCircle className="h-5 w-5" /> Booking Error
+                  </CardTitle>
+              </CardHeader>
+              <CardContent>
+                  <p className="text-destructive">{error}</p>
+              </CardContent>
+          </Card>
+      )}
+
+      {result && !error && !isLoading && (
         <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-               <CheckCircle className="h-5 w-5 text-green-600" /> Booking Result
+            <CardTitle className="flex items-center gap-2 text-green-600">
+               <CheckCircle className="h-5 w-5" /> Booking Confirmed (Simulated)
             </CardTitle>
-            <CardDescription>{result.bookingConfirmation}</CardDescription>
+             <CardDescription>{result.bookingMessage}</CardDescription>
           </CardHeader>
-          <CardContent>
-            <h3 className="font-semibold mb-2">Available Flights Found:</h3>
-            {result.flights.length > 0 ? (
-              <ul className="space-y-3">
-                {result.flights.map((flight: Flight, index: number) => (
-                  <li key={index} className="p-3 border rounded-md bg-muted/50 text-sm">
-                    <div className="flex justify-between items-center font-medium mb-1">
-                      <span>{flight.departureAirport} <PlaneTakeoff className="inline h-4 w-4 mx-1 text-primary"/> {flight.arrivalAirport}</span>
-                      <span className="font-mono text-primary">{flight.flightNumber}</span>
-                    </div>
-                    <div className="text-muted-foreground">
-                      <span>Depart: {formatTime(flight.departureTime)}</span> | <span>Arrive: {formatTime(flight.arrivalTime)}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-muted-foreground">No specific flight options were returned by the AI for this request.</p>
-            )}
+          <CardContent className="space-y-4">
+             <div className="p-4 border rounded-lg bg-muted/50">
+                 <div className="flex justify-between items-center mb-2">
+                    <span className="font-semibold text-lg text-primary">
+                        {result.bookedFlight.departureAirport} <PlaneTakeoff className="inline h-5 w-5 mx-1"/> {result.bookedFlight.arrivalAirport}
+                    </span>
+                     <span className="text-sm font-mono bg-primary/10 text-primary px-2 py-1 rounded">
+                         {result.bookedFlight.flightNumber}
+                     </span>
+                 </div>
+
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                     <div className="flex items-center gap-2">
+                         <Building className="h-4 w-4 text-muted-foreground" />
+                         <span>Airline: {result.bookedFlight.airline}</span>
+                     </div>
+                      <div className="flex items-center gap-2">
+                         <Ticket className="h-4 w-4 text-muted-foreground" />
+                         <span className="font-medium">Confirmation: <span className="font-mono bg-muted px-1 rounded">{result.confirmationNumber}</span></span>
+                     </div>
+                      <div className="flex items-center gap-2">
+                         <Clock className="h-4 w-4 text-muted-foreground" />
+                         <span>Departs: {formatDisplayDateTime(result.bookedFlight.departureTime)}</span>
+                      </div>
+                     <div className="flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-muted-foreground" />
+                          <span>Arrives: {formatDisplayDateTime(result.bookedFlight.arrivalTime)}</span>
+                      </div>
+                       <div className="flex items-center gap-2">
+                         <Users className="h-4 w-4 text-muted-foreground" />
+                         <span>Passengers: {form.getValues("numberOfPassengers")}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                          <DollarSign className="h-4 w-4 text-muted-foreground" />
+                          <span>Simulated Price/Person: ${result.bookedFlight.priceUSD.toFixed(2)}</span>
+                      </div>
+                     <div className="flex items-center gap-2 sm:col-span-2">
+                         <Clock className="h-4 w-4 text-muted-foreground" />
+                         <span>Duration: {formatDuration(result.bookedFlight.durationMinutes)}</span>
+                     </div>
+                 </div>
+             </div>
+
              {result.taskId && (
-                 <p className="mt-4 text-xs text-muted-foreground">Task ID: {result.taskId}</p>
+                 <p className="text-xs text-muted-foreground">Task ID: {result.taskId}</p>
              )}
           </CardContent>
         </Card>

@@ -117,4 +117,4 @@ Contributions are welcome! Please follow standard Git workflow (fork, branch, pu
 
 ## License
 
-[Specify your license here, e.g., MIT]
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

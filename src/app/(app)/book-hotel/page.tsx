@@ -5,9 +5,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { format } from "date-fns";
-import { CalendarIcon, Loader2, BedDouble, CalendarDays } from "lucide-react";
+import { CalendarIcon, Loader2, BedDouble, CalendarDays, CheckCircle, Users, MapPin, Star, DollarSign, AlertCircle } from "lucide-react";
 
-import { bookHotelReservation, BookHotelReservationOutput } from "@/ai/flows/book-hotel-reservation-from-prompt"; // Renamed import
+import { bookHotelReservation, BookHotelReservationOutput } from "@/ai/flows/book-hotel-reservation-from-prompt";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -32,15 +32,19 @@ const FormSchema = z.object({
   checkInDate: z.date({ required_error: "Check-in date is required." }),
   checkOutDate: z.date({ required_error: "Check-out date is required." }),
   numberOfGuests: z.coerce.number().int().positive({ message: "Number of guests must be a positive number." }),
-}).refine(data => data.checkInDate < data.checkOutDate, {
+}).refine(data => data.checkInDate && data.checkOutDate && data.checkInDate < data.checkOutDate, {
   message: "Check-out date must be after check-in date.",
   path: ["checkOutDate"], // Associate error with checkOutDate field
 });
 
+
+// Combine output type with task ID
 type HotelBookingResult = BookHotelReservationOutput & {
-    checkInDate?: string;
-    checkOutDate?: string;
     taskId?: string;
+    // Add fields that might be in the details but not top-level in output
+    address?: string;
+    rating?: number;
+    pricePerNightUSD?: number;
 };
 
 export default function BookHotelPage() {
@@ -48,13 +52,13 @@ export default function BookHotelPage() {
   const { user } = useAuth();
   const [isLoading, setIsLoading] = React.useState(false);
   const [result, setResult] = React.useState<HotelBookingResult | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
       city: "",
       numberOfGuests: 1,
-      // Initialize dates as undefined or null
       checkInDate: undefined,
       checkOutDate: undefined,
     },
@@ -72,6 +76,7 @@ export default function BookHotelPage() {
 
     setIsLoading(true);
     setResult(null);
+    setError(null); // Clear previous error
     try {
       // Format dates to YYYY-MM-DD strings before sending
       const inputData = {
@@ -85,14 +90,16 @@ export default function BookHotelPage() {
       const response = await bookHotelReservation(inputData);
       setResult(response);
       toast({
-        title: "Hotel Booking Processed",
-        description: `Successfully booked ${response.hotelName}. Confirmation: ${response.confirmationNumber}`,
+        title: "Hotel Booking Successful",
+        description: response.message, // Use message from response
       });
     } catch (error: any) {
       console.error("Error booking hotel:", error);
+      const errorMessage = error.message || "Failed to book hotel. Please try again.";
+      setError(errorMessage); // Set error state
       toast({
-        title: "Error",
-        description: error.message || "Failed to book hotel. Please try again.",
+        title: "Hotel Booking Failed",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -104,14 +111,17 @@ export default function BookHotelPage() {
   const formatDisplayDate = (dateString: string | undefined): string => {
       if (!dateString) return 'N/A';
       try {
-           const parts = dateString.split('-');
-           if (parts.length === 3) {
-               const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-               if (!isNaN(date.getTime())) {
-                  return format(date, 'PPP'); // e.g., October 10th, 2024
+           // Check if it's already a formatted string or needs parsing
+           if (!dateString.includes(',')) { // Basic check if not already formatted like "Oct 10th, 2024"
+               const parts = dateString.split('-');
+               if (parts.length === 3) {
+                   const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                   if (!isNaN(date.getTime())) {
+                      return format(date, 'PPP'); // e.g., October 10th, 2024
+                   }
                }
            }
-           return dateString; // Fallback if not YYYY-MM-DD
+           return dateString; // Return as is if format is unexpected or already formatted
       } catch {
           return dateString; // Fallback
       }
@@ -125,7 +135,7 @@ export default function BookHotelPage() {
         <CardHeader>
           <CardTitle>AI Hotel Booker</CardTitle>
           <CardDescription>
-            Enter your desired hotel details below. The AI will find and book the best available option based on your criteria.
+            Enter your desired hotel details below. The AI will find and book the best available option (simulation).
           </CardDescription>
         </CardHeader>
         <Form {...form}>
@@ -158,17 +168,18 @@ export default function BookHotelPage() {
                          <FormControl>
                            <Button
                              variant={"outline"}
-                             className={cn(
-                               "w-full pl-3 text-left font-normal",
-                               !field.value && "text-muted-foreground"
-                             )}
+                              className={cn(
+                                "w-full justify-start text-left font-normal",
+                                !field.value && "text-muted-foreground"
+                              )}
+                             disabled={isLoading}
                            >
+                            <CalendarIcon className="mr-2 h-4 w-4"/>
                              {field.value ? (
                                format(field.value, "PPP") // Display format
                              ) : (
                                <span>Pick a date</span>
                              )}
-                             <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
                            </Button>
                          </FormControl>
                        </PopoverTrigger>
@@ -202,17 +213,17 @@ export default function BookHotelPage() {
                            <Button
                              variant={"outline"}
                              className={cn(
-                               "w-full pl-3 text-left font-normal",
+                               "w-full justify-start text-left font-normal",
                                !field.value && "text-muted-foreground"
                              )}
-                             disabled={!form.watch('checkInDate')} // Disable if check-in not selected
+                             disabled={!form.watch('checkInDate') || isLoading} // Disable if check-in not selected or loading
                            >
+                              <CalendarIcon className="mr-2 h-4 w-4"/>
                              {field.value ? (
                                format(field.value, "PPP")
                              ) : (
                                <span>Pick a date</span>
                              )}
-                             <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
                            </Button>
                          </FormControl>
                        </PopoverTrigger>
@@ -261,7 +272,9 @@ export default function BookHotelPage() {
                     Booking...
                   </>
                 ) : (
-                  "Find & Book Hotel"
+                   <>
+                     <BedDouble className="mr-2 h-4 w-4" /> Find & Book Hotel
+                   </>
                 )}
               </Button>
             </CardFooter>
@@ -269,20 +282,72 @@ export default function BookHotelPage() {
         </Form>
       </Card>
 
-       {result && (
+        {error && !isLoading && (
+          <Card className="max-w-2xl mx-auto mt-8 shadow-md border-destructive/50 bg-destructive/10">
+              <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-destructive">
+                      <AlertCircle className="h-5 w-5" /> Booking Error
+                  </CardTitle>
+              </CardHeader>
+              <CardContent>
+                  <p className="text-destructive">{error}</p>
+              </CardContent>
+          </Card>
+        )}
+
+
+       {result && !error && !isLoading && (
          <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
            <CardHeader>
-             <CardTitle className="flex items-center gap-2">
-               <BedDouble className="h-5 w-5 text-green-600" /> Booking Confirmation
+             <CardTitle className="flex items-center gap-2 text-green-600">
+               <CheckCircle className="h-5 w-5" /> Reservation Confirmed (Simulated)
              </CardTitle>
+             <CardDescription>{result.message}</CardDescription>
            </CardHeader>
-           <CardContent className="space-y-2 text-sm">
-             <p><strong>Hotel Name:</strong> {result.hotelName}</p>
-             <p><strong>Confirmation Number:</strong> <span className="font-mono bg-muted px-2 py-1 rounded">{result.confirmationNumber}</span></p>
-             <div className="flex items-center gap-2 text-muted-foreground pt-2">
-                <CalendarDays className="h-4 w-4" />
-                <span>{formatDisplayDate(result.checkInDate)}</span> - <span>{formatDisplayDate(result.checkOutDate)}</span>
-             </div>
+           <CardContent className="space-y-4">
+                <div className="p-4 border rounded-lg bg-muted/50">
+                     <div className="flex justify-between items-start mb-2">
+                         <div>
+                             <h3 className="font-semibold text-lg text-primary">{result.hotelName}</h3>
+                             {result.address && (
+                                 <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
+                                     <MapPin className="h-4 w-4" />
+                                     <span>{result.address}</span>
+                                 </div>
+                             )}
+                         </div>
+                         <span className="text-sm font-mono bg-primary/10 text-primary px-2 py-1 rounded">
+                            {result.confirmationNumber}
+                         </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                        <div className="flex items-center gap-2">
+                            <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                            <span>Check-in: {formatDisplayDate(result.checkInDate)}</span>
+                        </div>
+                         <div className="flex items-center gap-2">
+                            <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                            <span>Check-out: {formatDisplayDate(result.checkOutDate)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Users className="h-4 w-4 text-muted-foreground" />
+                            <span>Guests: {result.numberOfGuests}</span>
+                        </div>
+                         {result.rating !== undefined && (
+                            <div className="flex items-center gap-1">
+                                <Star className="h-4 w-4 text-yellow-500 fill-yellow-400" />
+                                <span>Rating: {result.rating.toFixed(1)}</span>
+                            </div>
+                         )}
+                         {result.pricePerNightUSD !== undefined && (
+                            <div className="flex items-center gap-1 sm:col-span-2">
+                                <DollarSign className="h-4 w-4 text-muted-foreground" />
+                                <span>Simulated Price/Night: ${result.pricePerNightUSD.toFixed(2)}</span>
+                            </div>
+                         )}
+                    </div>
+               </div>
               {result.taskId && (
                   <p className="mt-1 text-xs text-muted-foreground">Task ID: {result.taskId}</p>
               )}

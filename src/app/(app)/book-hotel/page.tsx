@@ -6,9 +6,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { format } from "date-fns";
-import { CalendarIcon, Loader2, BedDouble, CalendarDays, CheckCircle, Users, MapPin, Star, DollarSign, AlertCircle } from "lucide-react";
+import { CalendarIcon, Loader2, BedDouble, CalendarDays, Users, MapPin, Star, DollarSign, AlertCircle, ExternalLink, Search } from "lucide-react";
+import Link from "next/link"; // For external booking links
 
-import { bookHotelReservation, BookHotelReservationOutput } from "@/ai/flows/book-hotel-reservation-from-prompt";
+import { searchHotels, SearchHotelsOutput } from "@/ai/flows/search-hotels"; // Import the search flow
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -26,6 +27,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
+import Image from "next/image"; // Use next/image for optimized images
 
 // Zod schema for form validation on the client-side
 const FormSchema = z.object({
@@ -39,21 +41,17 @@ const FormSchema = z.object({
 });
 
 
-// Combine output type with task ID
-type HotelBookingResult = BookHotelReservationOutput & {
-    taskId?: string;
-    // Add fields that might be in the details but not top-level in output
-    address?: string;
-    rating?: number;
-    pricePerNightUSD?: number;
-};
+// Type for the hotel search results array
+type HotelSearchResults = SearchHotelsOutput;
 
-export default function BookHotelPage() {
+export default function SearchHotelPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const [isLoading, setIsLoading] = React.useState(false);
-  const [result, setResult] = React.useState<HotelBookingResult | null>(null);
+  const [results, setResults] = React.useState<HotelSearchResults>([]); // Store array of hotels
   const [error, setError] = React.useState<string | null>(null);
+  const [searchPerformed, setSearchPerformed] = React.useState(false); // Track if search was done
+
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
@@ -69,15 +67,17 @@ export default function BookHotelPage() {
     if (!user) {
       toast({
         title: "Authentication Error",
-        description: "You must be signed in to book a hotel.",
+        description: "You must be signed in to search for hotels.",
         variant: "destructive",
       });
       return;
     }
 
     setIsLoading(true);
-    setResult(null);
+    setResults([]); // Clear previous results
     setError(null); // Clear previous error
+    setSearchPerformed(true); // Mark that a search has been attempted
+
     try {
       // Format dates to YYYY-MM-DD strings before sending
       const inputData = {
@@ -87,28 +87,27 @@ export default function BookHotelPage() {
         userId: user.uid,
       };
 
-      // Call the refactored flow function
-      const response = await bookHotelReservation(inputData);
-      setResult(response);
+      // Call the search flow function
+      const response = await searchHotels(inputData);
+      setResults(response); // Set the array of hotel results
       toast({
-        title: "Hotel Booking Successful",
-        description: response.message, // Use message from response
+        title: "Hotel Search Successful",
+        description: `Found ${response.length} hotel options.`,
       });
     } catch (error: any) {
-      console.error("Detailed error booking hotel:", error); // Log the full error object
-       // Attempt to get a more specific message
-       let errorMessage = "An unexpected error occurred while booking the hotel.";
+      console.error("Detailed error searching hotels:", error); // Log the full error object
+       let errorMessage = "An unexpected error occurred while searching for hotels.";
        if (error instanceof Error) {
           errorMessage = error.message || errorMessage;
        } else if (typeof error === 'string') {
           errorMessage = error;
        } else if (error?.details) {
-           // Handle potential structured errors if the backend sends them
            errorMessage = error.details;
        }
       setError(errorMessage); // Set error state
+      setResults([]); // Ensure results are empty on error
       toast({
-        title: "Hotel Booking Failed",
+        title: "Hotel Search Failed",
         description: errorMessage,
         variant: "destructive",
       });
@@ -117,35 +116,15 @@ export default function BookHotelPage() {
     }
   }
 
-  // Helper to format date string (YYYY-MM-DD) to a readable format
-  const formatDisplayDate = (dateString: string | undefined): string => {
-      if (!dateString) return 'N/A';
-      try {
-           // Check if it's already a formatted string or needs parsing
-           if (!dateString.includes(',')) { // Basic check if not already formatted like "Oct 10th, 2024"
-               const parts = dateString.split('-');
-               if (parts.length === 3) {
-                   const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-                   if (!isNaN(date.getTime())) {
-                      return format(date, 'PPP'); // e.g., October 10th, 2024
-                   }
-               }
-           }
-           return dateString; // Return as is if format is unexpected or already formatted
-      } catch {
-          return dateString; // Fallback
-      }
-  }
-
   return (
     <div className="container mx-auto py-8">
-      <h1 className="text-3xl font-bold mb-6 text-foreground">Book a Hotel</h1>
+      <h1 className="text-3xl font-bold mb-6 text-foreground">Search Hotels</h1>
 
       <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
-          <CardTitle>AI Hotel Booker</CardTitle>
+          <CardTitle>AI Hotel Finder</CardTitle>
           <CardDescription>
-            Enter your desired hotel details below. The AI will find and book the best available option (simulation).
+            Enter your desired hotel details below. The AI will find available options (simulation).
           </CardDescription>
         </CardHeader>
         <Form {...form}>
@@ -279,11 +258,11 @@ export default function BookHotelPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Booking...
+                    Searching...
                   </>
                 ) : (
                    <>
-                     <BedDouble className="mr-2 h-4 w-4" /> Find & Book Hotel
+                     <Search className="mr-2 h-4 w-4" /> Search Hotels
                    </>
                 )}
               </Button>
@@ -292,11 +271,11 @@ export default function BookHotelPage() {
         </Form>
       </Card>
 
-        {error && !isLoading && (
+        {searchPerformed && !isLoading && error && (
           <Card className="max-w-2xl mx-auto mt-8 shadow-md border-destructive/50 bg-destructive/10">
               <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-destructive">
-                      <AlertCircle className="h-5 w-5" /> Booking Error
+                      <AlertCircle className="h-5 w-5" /> Search Error
                   </CardTitle>
               </CardHeader>
               <CardContent>
@@ -305,65 +284,69 @@ export default function BookHotelPage() {
           </Card>
         )}
 
-
-       {result && !error && !isLoading && (
-         <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
-           <CardHeader>
-             <CardTitle className="flex items-center gap-2 text-green-600">
-               <CheckCircle className="h-5 w-5" /> Reservation Confirmed (Simulated)
-             </CardTitle>
-             <CardDescription>{result.message}</CardDescription>
-           </CardHeader>
-           <CardContent className="space-y-4">
-                <div className="p-4 border rounded-lg bg-muted/50">
-                     <div className="flex justify-between items-start mb-2">
-                         <div>
-                             <h3 className="font-semibold text-lg text-primary">{result.hotelName}</h3>
-                             {result.address && (
-                                 <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
-                                     <MapPin className="h-4 w-4" />
-                                     <span>{result.address}</span>
-                                 </div>
-                             )}
-                         </div>
-                         <span className="text-sm font-mono bg-primary/10 text-primary px-2 py-1 rounded">
-                            {result.confirmationNumber}
-                         </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                        <div className="flex items-center gap-2">
-                            <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                            <span>Check-in: {formatDisplayDate(result.checkInDate)}</span>
-                        </div>
-                         <div className="flex items-center gap-2">
-                            <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                            <span>Check-out: {formatDisplayDate(result.checkOutDate)}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Users className="h-4 w-4 text-muted-foreground" />
-                            <span>Guests: {result.numberOfGuests}</span>
-                        </div>
-                         {result.rating !== undefined && (
-                            <div className="flex items-center gap-1">
-                                <Star className="h-4 w-4 text-yellow-500 fill-yellow-400" />
-                                <span>Rating: {result.rating.toFixed(1)}</span>
-                            </div>
-                         )}
-                         {result.pricePerNightUSD !== undefined && (
-                            <div className="flex items-center gap-1 sm:col-span-2">
-                                <DollarSign className="h-4 w-4 text-muted-foreground" />
-                                <span>Simulated Price/Night: ${result.pricePerNightUSD.toFixed(2)}</span>
-                            </div>
-                         )}
-                    </div>
-               </div>
-              {result.taskId && (
-                  <p className="mt-1 text-xs text-muted-foreground">Task ID: {result.taskId}</p>
-              )}
-           </CardContent>
-         </Card>
+       {searchPerformed && !isLoading && !error && results.length === 0 && (
+          <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20 bg-muted/30">
+               <CardHeader>
+                   <CardTitle className="flex items-center gap-2 text-muted-foreground">
+                       <BedDouble className="h-5 w-5" /> No Hotels Found
+                   </CardTitle>
+               </CardHeader>
+               <CardContent>
+                   <p className="text-muted-foreground">No hotels matched your search criteria. Please try different dates or cities.</p>
+               </CardContent>
+           </Card>
        )}
+
+
+       {results.length > 0 && !error && !isLoading && (
+          <div className="max-w-4xl mx-auto mt-8">
+             <h2 className="text-2xl font-semibold mb-4 text-center text-foreground">Search Results</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {results.map((hotel) => (
+                      <Card key={hotel.id} className="shadow-md border-primary/20 overflow-hidden hover:shadow-lg transition-shadow duration-200 flex flex-col">
+                         <div className="relative w-full h-48">
+                           <Image
+                               src={hotel.imageUrl}
+                               alt={`Image of ${hotel.name}`}
+                               layout="fill"
+                               objectFit="cover"
+                               unoptimized // Using picsum, no need for Next.js optimization here
+                           />
+                         </div>
+                         <CardHeader className="pb-2">
+                            <CardTitle className="text-lg text-primary">{hotel.name}</CardTitle>
+                            <div className="flex items-center gap-1 text-sm text-muted-foreground pt-1">
+                                <Star className="h-4 w-4 text-yellow-500 fill-yellow-400" />
+                                <span>{hotel.rating.toFixed(1)}</span>
+                            </div>
+                         </CardHeader>
+                         <CardContent className="text-sm space-y-1 flex-grow">
+                              <p className="text-muted-foreground line-clamp-2">{hotel.description}</p>
+                              <div className="flex items-center gap-1 pt-1">
+                                  <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+                                  <span className="text-xs">{hotel.address}</span>
+                              </div>
+                              <div className="flex items-center gap-1 pt-1">
+                                 <DollarSign className="h-4 w-4 text-muted-foreground" />
+                                 <span className="font-semibold">Price/Night: ${hotel.pricePerNightUSD.toFixed(2)}</span>
+                             </div>
+                         </CardContent>
+                          <CardFooter className="pt-4 justify-end">
+                               {hotel.bookingUrl ? (
+                                  <Link href={hotel.bookingUrl} target="_blank" rel="noopener noreferrer" passHref>
+                                      <Button size="sm" variant="outline" className="border-primary text-primary hover:bg-primary/10">
+                                          View Deal <ExternalLink className="ml-2 h-4 w-4" />
+                                      </Button>
+                                  </Link>
+                               ) : (
+                                  <Button size="sm" variant="outline" disabled>Booking Unavailable</Button>
+                               )}
+                          </CardFooter>
+                     </Card>
+                  ))}
+             </div>
+          </div>
+        )}
     </div>
   );
 }

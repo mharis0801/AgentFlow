@@ -6,9 +6,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { format } from "date-fns";
-import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle, Building, Clock, Ticket, Users, DollarSign, AlertCircle } from "lucide-react";
+import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle, Building, Clock, Ticket, Users, DollarSign, AlertCircle, ExternalLink } from "lucide-react";
+import Link from "next/link"; // For external booking links
 
-import { findAndBookFlights, FindAndBookFlightsOutput } from "@/ai/flows/find-and-book-flights";
+import { searchFlights, SearchFlightsOutput } from "@/ai/flows/search-flights"; // Import the search flow
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -26,6 +27,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
+import { Flight } from "@/services/flight-booking"; // Import Flight type for result structure
 
 // Zod schema for form validation on the client-side
 const FormSchema = z.object({
@@ -35,17 +37,16 @@ const FormSchema = z.object({
   numberOfPassengers: z.coerce.number().int().positive({ message: "Number of passengers must be a positive number." }),
 });
 
-// Combine output type with task ID
-type FlightBookingResult = FindAndBookFlightsOutput & {
-    taskId?: string;
-};
+// Type for the flight search results array
+type FlightSearchResults = SearchFlightsOutput;
 
-export default function BookFlightPage() {
+export default function SearchFlightPage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const [isLoading, setIsLoading] = React.useState(false);
-  const [result, setResult] = React.useState<FlightBookingResult | null>(null);
+  const [results, setResults] = React.useState<FlightSearchResults>([]); // Store array of flights
   const [error, setError] = React.useState<string | null>(null);
+  const [searchPerformed, setSearchPerformed] = React.useState(false); // Track if search was done
 
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
@@ -61,15 +62,16 @@ export default function BookFlightPage() {
       if (!user) {
         toast({
           title: "Authentication Error",
-          description: "You must be signed in to book a flight.",
+          description: "You must be signed in to search for flights.",
           variant: "destructive",
         });
         return;
       }
 
     setIsLoading(true);
-    setResult(null);
+    setResults([]); // Clear previous results
     setError(null); // Clear previous errors
+    setSearchPerformed(true); // Mark that a search has been attempted
     try {
         // Format date to YYYY-MM-DD string before sending
         const inputData = {
@@ -78,28 +80,27 @@ export default function BookFlightPage() {
             userId: user.uid,
         };
 
-       // Call the refactored flow function
-      const response = await findAndBookFlights(inputData);
-      setResult(response);
+       // Call the search flow function
+      const response = await searchFlights(inputData);
+      setResults(response); // Set the array of flight results
       toast({
-        title: "Flight Booking Successful",
-        description: response.bookingMessage,
+        title: "Flight Search Successful",
+        description: `Found ${response.length} flight options.`,
       });
     } catch (error: any) {
-      console.error("Detailed error booking flight:", error); // Log the full error object
-      // Attempt to get a more specific message
-      let errorMessage = "An unexpected error occurred while booking the flight.";
+      console.error("Detailed error searching flights:", error); // Log the full error object
+      let errorMessage = "An unexpected error occurred while searching for flights.";
       if (error instanceof Error) {
          errorMessage = error.message || errorMessage;
       } else if (typeof error === 'string') {
          errorMessage = error;
       } else if (error?.details) {
-          // Handle potential structured errors if the backend sends them
           errorMessage = error.details;
       }
       setError(errorMessage); // Set error state
+      setResults([]); // Ensure results are empty on error
       toast({
-        title: "Flight Booking Failed",
+        title: "Flight Search Failed",
         description: errorMessage,
         variant: "destructive",
       });
@@ -114,7 +115,6 @@ export default function BookFlightPage() {
        try {
            const date = new Date(dateTimeString);
            if (isNaN(date.getTime())) return dateTimeString; // Fallback
-           // Format as Oct 10, 2024, 9:00 AM (local time)
            return format(date, "PPp");
        } catch {
            return dateTimeString; // Fallback
@@ -131,13 +131,13 @@ export default function BookFlightPage() {
 
   return (
     <div className="container mx-auto py-8">
-      <h1 className="text-3xl font-bold mb-6 text-foreground">Find & Book Flights</h1>
+      <h1 className="text-3xl font-bold mb-6 text-foreground">Search Flights</h1>
 
       <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
-          <CardTitle>AI Flight Booker</CardTitle>
+          <CardTitle>AI Flight Finder</CardTitle>
           <CardDescription>
-            Enter your flight details below. The AI will find available options and book the best fit (simulation).
+            Enter your flight details below. The AI will find available options (simulation).
           </CardDescription>
         </CardHeader>
         <Form {...form}>
@@ -237,11 +237,11 @@ export default function BookFlightPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Searching & Booking...
+                    Searching Flights...
                   </>
                 ) : (
                    <>
-                     <PlaneTakeoff className="mr-2 h-4 w-4"/> Find & Book Flight
+                     <PlaneTakeoff className="mr-2 h-4 w-4"/> Search Flights
                    </>
                 )}
               </Button>
@@ -250,11 +250,11 @@ export default function BookFlightPage() {
         </Form>
       </Card>
 
-      {error && !isLoading && (
+      {searchPerformed && !isLoading && error && (
           <Card className="max-w-2xl mx-auto mt-8 shadow-md border-destructive/50 bg-destructive/10">
               <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-destructive">
-                      <AlertCircle className="h-5 w-5" /> Booking Error
+                      <AlertCircle className="h-5 w-5" /> Search Error
                   </CardTitle>
               </CardHeader>
               <CardContent>
@@ -263,63 +263,72 @@ export default function BookFlightPage() {
           </Card>
       )}
 
-      {result && !error && !isLoading && (
-        <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-green-600">
-               <CheckCircle className="h-5 w-5" /> Booking Confirmed (Simulated)
-            </CardTitle>
-             <CardDescription>{result.bookingMessage}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-             <div className="p-4 border rounded-lg bg-muted/50">
-                 <div className="flex justify-between items-center mb-2">
-                    <span className="font-semibold text-lg text-primary">
-                        {result.bookedFlight.departureAirport} <PlaneTakeoff className="inline h-5 w-5 mx-1"/> {result.bookedFlight.arrivalAirport}
-                    </span>
-                     <span className="text-sm font-mono bg-primary/10 text-primary px-2 py-1 rounded">
-                         {result.bookedFlight.flightNumber}
-                     </span>
-                 </div>
-
-                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                     <div className="flex items-center gap-2">
-                         <Building className="h-4 w-4 text-muted-foreground" />
-                         <span>Airline: {result.bookedFlight.airline}</span>
-                     </div>
-                      <div className="flex items-center gap-2">
-                         <Ticket className="h-4 w-4 text-muted-foreground" />
-                         <span className="font-medium">Confirmation: <span className="font-mono bg-muted px-1 rounded">{result.confirmationNumber}</span></span>
-                     </div>
-                      <div className="flex items-center gap-2">
-                         <Clock className="h-4 w-4 text-muted-foreground" />
-                         <span>Departs: {formatDisplayDateTime(result.bookedFlight.departureTime)}</span>
-                      </div>
-                     <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4 text-muted-foreground" />
-                          <span>Arrives: {formatDisplayDateTime(result.bookedFlight.arrivalTime)}</span>
-                      </div>
-                       <div className="flex items-center gap-2">
-                         <Users className="h-4 w-4 text-muted-foreground" />
-                         <span>Passengers: {form.getValues("numberOfPassengers")}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                          <DollarSign className="h-4 w-4 text-muted-foreground" />
-                          <span>Simulated Price/Person: ${result.bookedFlight.priceUSD.toFixed(2)}</span>
-                      </div>
-                     <div className="flex items-center gap-2 sm:col-span-2">
-                         <Clock className="h-4 w-4 text-muted-foreground" />
-                         <span>Duration: {formatDuration(result.bookedFlight.durationMinutes)}</span>
-                     </div>
-                 </div>
-             </div>
-
-             {result.taskId && (
-                 <p className="text-xs text-muted-foreground">Task ID: {result.taskId}</p>
-             )}
-          </CardContent>
-        </Card>
+      {searchPerformed && !isLoading && !error && results.length === 0 && (
+         <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20 bg-muted/30">
+              <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-muted-foreground">
+                      <PlaneTakeoff className="h-5 w-5" /> No Flights Found
+                  </CardTitle>
+              </CardHeader>
+              <CardContent>
+                  <p className="text-muted-foreground">No flights matched your search criteria. Please try different dates or cities.</p>
+              </CardContent>
+          </Card>
       )}
+
+       {results.length > 0 && !error && !isLoading && (
+         <div className="max-w-4xl mx-auto mt-8">
+            <h2 className="text-2xl font-semibold mb-4 text-center text-foreground">Search Results</h2>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 {results.map((flight) => (
+                     <Card key={flight.id} className="shadow-md border-primary/20 hover:shadow-lg transition-shadow duration-200">
+                        <CardHeader className="pb-3">
+                            <CardTitle className="flex justify-between items-center">
+                                <span className="text-lg text-primary">
+                                    {flight.departureAirport} <PlaneTakeoff className="inline h-5 w-5 mx-1"/> {flight.arrivalAirport}
+                                </span>
+                                <span className="text-sm font-mono bg-primary/10 text-primary px-2 py-1 rounded">
+                                    {flight.flightNumber}
+                                </span>
+                            </CardTitle>
+                             <CardDescription className="flex items-center gap-1 text-sm pt-1">
+                                 <Building className="h-4 w-4"/> {flight.airline}
+                             </CardDescription>
+                        </CardHeader>
+                        <CardContent className="text-sm space-y-2">
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-4 w-4 text-muted-foreground" />
+                                <span>Departs: {formatDisplayDateTime(flight.departureTime)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-4 w-4 text-muted-foreground" />
+                                <span>Arrives: {formatDisplayDateTime(flight.arrivalTime)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-4 w-4 text-muted-foreground" />
+                                <span>Duration: {formatDuration(flight.durationMinutes)}</span>
+                             </div>
+                             <div className="flex items-center gap-2">
+                                <DollarSign className="h-4 w-4 text-muted-foreground" />
+                                <span className="font-semibold">Price/Person: ${flight.priceUSD.toFixed(2)}</span>
+                             </div>
+                        </CardContent>
+                         <CardFooter className="pt-4 justify-end">
+                              {flight.bookingUrl ? (
+                                 <Link href={flight.bookingUrl} target="_blank" rel="noopener noreferrer" passHref>
+                                     <Button size="sm" variant="outline" className="border-primary text-primary hover:bg-primary/10">
+                                         View on {flight.airline} <ExternalLink className="ml-2 h-4 w-4" />
+                                     </Button>
+                                 </Link>
+                              ) : (
+                                 <Button size="sm" variant="outline" disabled>Booking Unavailable</Button>
+                              )}
+                         </CardFooter>
+                    </Card>
+                 ))}
+            </div>
+         </div>
+       )}
     </div>
   );
 }

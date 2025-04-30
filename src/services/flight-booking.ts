@@ -1,5 +1,6 @@
+
 /**
- * @fileOverview Mock service for finding and booking flights.
+ * @fileOverview Mock service for finding flights.
  * **NOTE:** This uses mock data. A real implementation requires integrating
  * with a flight booking API (e.g., Amadeus, Sabre, Skyscanner API) or a
  * third-party aggregator service. These often require commercial agreements.
@@ -45,6 +46,10 @@ export interface Flight {
    * Price per passenger in USD (for simulation).
    */
   priceUSD: number;
+  /**
+   * Optional URL to book the flight (e.g., a deep link to the airline's site).
+   */
+  bookingUrl?: string;
 }
 
 /**
@@ -67,37 +72,21 @@ export interface FlightSearchCriteria {
    * The number of passengers.
    */
   numberOfPassengers: number;
-  // Optional criteria (could be added later)
-  // returnDate?: string;
-  // maxPrice?: number;
-  // preferredAirline?: string;
-  // directOnly?: boolean;
 }
 
 /**
- * Simulates finding flights based on the provided search criteria.
+ * Simulates searching for flights based on the provided search criteria using an external API.
  *
  * @param searchCriteria The criteria to use for finding flights.
  * @returns A promise that resolves to an array of Flight objects.
  */
-export async function findFlights(searchCriteria: FlightSearchCriteria): Promise<Flight[]> {
-  console.log("Simulating flight search with criteria:", searchCriteria);
+export async function searchFlightsAPI(searchCriteria: FlightSearchCriteria): Promise<Flight[]> {
+  console.log("Simulating flight search API call with criteria:", searchCriteria);
 
   // !! ================================================== !!
   // !! IMPORTANT: Real Implementation Required            !!
   // !! ================================================== !!
-  // !! This function should be replaced with actual API calls to a
-  // !! flight search provider (GDS like Amadeus/Sabre, aggregator like Skyscanner).
-  // !! Key considerations for a real implementation:
-  // !! 1. API Integration: Choose an API, understand its request/response format.
-  // !! 2. Authentication: Handle API keys or OAuth tokens securely.
-  // !! 3. Parameter Mapping: Convert `searchCriteria` to the API's required parameters
-  // !!    (e.g., airport codes, date formats, passenger types).
-  // !! 4. Response Parsing: Parse the API response into the `Flight[]` structure.
-  // !!    Handle different flight legs, connections, pricing details, taxes.
-  // !! 5. Error Handling: Manage API errors, timeouts, no results scenarios.
-  // !! 6. Cost & Usage: Be mindful of API call costs and rate limits.
-  // !! 7. Caching: Consider caching results for short periods if appropriate.
+  // !! Replace this with actual API calls.
   // !! ================================================== !!
 
   // --- Start Simulation ---
@@ -108,15 +97,13 @@ export async function findFlights(searchCriteria: FlightSearchCriteria): Promise
   const mockResults: Flight[] = [];
   const departureBase = new Date(`${searchCriteria.departureDate}T00:00:00Z`);
 
-  // Basic simulation: Generate a few mock flights if criteria match loosely
-  // In a real scenario, this logic would be replaced by API calls.
   if (searchCriteria.departureCity && searchCriteria.arrivalCity) {
-    const airlines = ["Airline Alpha", "Beta Airways", "Gamma Jet"];
-    const basePrice = 150 + Math.random() * 300; // Base price range
+    const airlines = ["Skylink Airways", "Horizon Jet", "Apex Airlines"];
+    const basePrice = 150 + Math.random() * 300;
 
-    for (let i = 0; i < Math.floor(1 + Math.random() * 4); i++) { // Generate 1-4 mock flights
-      const departureHour = Math.floor(8 + Math.random() * 10); // 8 AM - 5 PM
-      const flightDuration = Math.floor(120 + Math.random() * 240); // 2-6 hours duration
+    for (let i = 0; i < Math.floor(2 + Math.random() * 5); i++) { // Generate 2-6 mock flights
+      const departureHour = Math.floor(7 + Math.random() * 12); // 7 AM - 6 PM
+      const flightDuration = Math.floor(90 + Math.random() * 300); // 1.5 - 5 hours duration
 
       const departureTime = new Date(departureBase);
       departureTime.setUTCHours(departureHour, Math.floor(Math.random() * 60), 0, 0);
@@ -124,65 +111,36 @@ export async function findFlights(searchCriteria: FlightSearchCriteria): Promise
       const arrivalTime = new Date(departureTime);
       arrivalTime.setUTCMinutes(arrivalTime.getUTCMinutes() + flightDuration);
 
-      const flightNum = `${airlines[i % airlines.length].substring(0, 2).toUpperCase()}${Math.floor(100 + Math.random() * 900)}`;
-      const depAirport = searchCriteria.departureCity.length === 3 ? searchCriteria.departureCity.toUpperCase() : "AAA"; // Use code or mock
-      const arrAirport = searchCriteria.arrivalCity.length === 3 ? searchCriteria.arrivalCity.toUpperCase() : "BBB"; // Use code or mock
+      const airlineName = airlines[i % airlines.length];
+      const flightNum = `${airlineName.substring(0, 2).toUpperCase()}${Math.floor(100 + Math.random() * 900)}`;
+      const depAirport = searchCriteria.departureCity.length === 3 ? searchCriteria.departureCity.toUpperCase() : "DEP";
+      const arrAirport = searchCriteria.arrivalCity.length === 3 ? searchCriteria.arrivalCity.toUpperCase() : "ARR";
+
+      // Simulate a booking URL (replace with actual deep links from API)
+      const bookingUrl = `https://example-airline-booking.com/book?flight=${flightNum}&dep=${depAirport}&arr=${arrAirport}&date=${searchCriteria.departureDate}&pax=${searchCriteria.numberOfPassengers}`;
 
       mockResults.push({
         id: `${flightNum}-${departureTime.toISOString()}`,
-        airline: airlines[i % airlines.length],
+        airline: airlineName,
         flightNumber: flightNum,
         departureAirport: depAirport,
         arrivalAirport: arrAirport,
         departureTime: departureTime.toISOString(),
         arrivalTime: arrivalTime.toISOString(),
         durationMinutes: flightDuration,
-        priceUSD: parseFloat((basePrice + (Math.random() * 100 - 50)).toFixed(2)), // Add price variation
+        priceUSD: parseFloat((basePrice + (Math.random() * 100 - 50)).toFixed(2)),
+        bookingUrl: bookingUrl // Add the simulated booking URL
       });
     }
   }
 
-   // Sort by departure time for consistency
    mockResults.sort((a, b) => new Date(a.departureTime).getTime() - new Date(b.departureTime).getTime());
 
-  console.log(`Simulated finding ${mockResults.length} flights.`);
+  console.log(`Simulated finding ${mockResults.length} flights via API.`);
   return mockResults;
   // --- End Simulation ---
 }
 
-/**
- * Simulates booking a specific flight.
- * In a real application, this would involve a separate API call to confirm the booking,
- * handle payment, and receive a confirmation number/PNR.
- *
- * @param flight The flight object to book.
- * @param numberOfPassengers The number of passengers for the booking.
- * @returns A promise resolving to a simulated booking confirmation object.
- */
-export async function bookFlight(flight: Flight, numberOfPassengers: number): Promise<{ success: boolean; confirmationNumber: string | null; message: string }> {
-    console.log(`Simulating booking flight ${flight.flightNumber} for ${numberOfPassengers} passengers...`);
+// Note: The bookFlight function is removed as the flow now focuses on searching.
+// Booking would typically happen by redirecting the user via the bookingUrl.
 
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 400));
-
-    // Simulate potential booking failure (e.g., 15% chance)
-    const shouldFail = Math.random() < 0.15;
-    if (shouldFail) {
-        console.error(`Simulated booking failure for flight ${flight.flightNumber}.`);
-        return {
-            success: false,
-            confirmationNumber: null,
-            message: `Booking failed for flight ${flight.flightNumber}. The fare may have changed or the seats are no longer available. Please try searching again.`
-        };
-    }
-
-    // Simulate successful booking
-    const confirmationNumber = `FL-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    console.log(`Simulated booking successful for flight ${flight.flightNumber}. Confirmation: ${confirmationNumber}`);
-
-    return {
-        success: true,
-        confirmationNumber: confirmationNumber,
-        message: `Flight ${flight.flightNumber} from ${flight.departureAirport} to ${flight.arrivalAirport} for ${numberOfPassengers} passenger(s) is confirmed (simulated). Confirmation number: ${confirmationNumber}.`
-    };
-}

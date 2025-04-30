@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -10,15 +11,15 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
 } from "@/components/ui/sidebar";
-import { Mail, Calendar, Plane, Hotel, LayoutDashboard, Bot } from "lucide-react";
+import { Mail, Calendar, Plane, Hotel, LayoutDashboard, Bot, Search } from "lucide-react"; // Added Search icon
 import { cn } from "@/lib/utils";
 
 const menuItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/schedule-email", label: "Schedule Email", icon: Mail },
   { href: "/setup-meeting", label: "Setup Meeting", icon: Calendar },
-  { href: "/book-hotel", label: "Book Hotel", icon: Hotel },
-  { href: "/book-flight", label: "Book Flight", icon: Plane },
+  { href: "/book-hotel", label: "Search Hotels", icon: Hotel }, // Updated label
+  { href: "/book-flight", label: "Search Flights", icon: Plane }, // Updated label
 ];
 
 export default function AppSidebar() {
@@ -63,3 +64,4 @@ export default function AppSidebar() {
     </Sidebar>
   );
 }
+

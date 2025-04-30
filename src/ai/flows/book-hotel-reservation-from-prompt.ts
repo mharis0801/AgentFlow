@@ -37,6 +37,10 @@ const BookHotelReservationOutputSchema = z.object({
   numberOfGuests: z.number().int().positive().describe('The number of guests booked.'),
   message: z.string().describe("A confirmation message about the booking."),
   taskId: z.string().optional().describe("The ID of the saved task in Firestore."),
+  // Include optional details potentially added during the process
+  address: z.string().optional().describe('The address of the booked hotel.'),
+  rating: z.number().optional().describe('The rating of the booked hotel.'),
+  pricePerNightUSD: z.number().optional().describe('The price per night of the booked hotel.'),
 });
 export type BookHotelReservationOutput = z.infer<typeof BookHotelReservationOutputSchema>;
 
@@ -80,9 +84,10 @@ async (input) => {
        initialTaskSaved = true;
        console.log(`Initial pending hotel task saved with ID: ${taskId}`);
    } catch (saveError: any) {
-       console.error("Failed to save initial pending task:", saveError);
-       // If we can't even save the initial task, throw a critical error
-       throw new Error(`Failed to initiate hotel booking task: ${saveError.message}`);
+      // Log the detailed original error before re-throwing
+       console.error("Failed to save initial pending task (Original Error):", saveError);
+       // Re-throw with a more specific message, including the original one
+       throw new Error(`Failed to initiate hotel booking task: ${saveError.message || 'Unknown Firestore save error'}`);
    }
 
    // Helper function to update task status on failure
@@ -165,7 +170,7 @@ async (input) => {
    } catch (error: any) {
        console.error("Error in bookHotelReservationFlow:", error);
        // Ensure the task is marked as failed if an error occurred after initial save
-       if (initialTaskSaved) {
+       if (initialTaskSaved && taskId) { // Only update if task was initially saved
            await updateTaskToFailed(error.message || 'An unexpected error occurred during hotel booking.');
        }
        // Re-throw the error to be caught by the frontend caller

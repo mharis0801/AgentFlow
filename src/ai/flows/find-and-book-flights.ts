@@ -87,8 +87,10 @@ const findAndBookFlightsFlow = ai.defineFlow<
          initialTaskSaved = true;
          console.log(`Initial pending flight task saved with ID: ${taskId}`);
      } catch (saveError: any) {
-         console.error("Failed to save initial pending flight task:", saveError);
-         throw new Error(`Failed to initiate flight booking task: ${saveError.message}`);
+         // Log the detailed original error before re-throwing
+         console.error("Failed to save initial pending flight task (Original Error):", saveError);
+         // Re-throw with a more specific message, including the original one
+         throw new Error(`Failed to initiate flight booking task: ${saveError.message || 'Unknown Firestore save error'}`);
      }
 
      // Helper function to update task status on failure

@@ -1,5 +1,5 @@
 import { db } from "@/lib/firebase/firebase";
-import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, Timestamp } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, Timestamp, updateDoc } from "firebase/firestore";
 
 interface UserData {
   uid: string;
@@ -69,16 +69,17 @@ export const getUserData = async (uid: string): Promise<UserData | null> => {
 
 // --- Agent Task Management ---
 
-type TaskType = 'email' | 'meeting' | 'hotel' | 'flight';
-type TaskStatus = 'pending' | 'scheduled' | 'confirmed' | 'failed' | 'completed';
+export type TaskType = 'email' | 'meeting' | 'hotel' | 'flight';
+export type TaskStatus = 'pending' | 'processing' | 'scheduled' | 'confirmed' | 'failed' | 'completed' | 'sent';
 
-interface AgentTaskPayload {
+export interface AgentTaskPayload {
   userId: string; // UID of the user who requested the task
   type: TaskType;
   prompt?: string; // Original prompt (optional, for reference)
   details: Record<string, any>; // Specific details based on type (e.g., { to, subject, body } for email)
   status: TaskStatus;
   createdAt?: Timestamp; // Handled by serverTimestamp
+  updatedAt?: Timestamp; // Track updates
   result?: Record<string, any> | null; // Store confirmation details or error info
   error?: string | null; // Store error message if failed
 }
@@ -88,22 +89,14 @@ interface AgentTaskPayload {
  * @param taskData The task data payload.
  * @returns The ID of the newly created task document.
  */
-export const saveAgentTask = async (taskData: Omit<AgentTaskPayload, 'createdAt'>): Promise<string> => {
-    // Ensure dates within details are Firestore Timestamps if they represent specific times
-    // (Example: Convert JS Date objects to Timestamps before saving)
-    // if (taskData.type === 'meeting' && taskData.details.startTime instanceof Date) {
-    //   taskData.details.startTime = Timestamp.fromDate(taskData.details.startTime);
-    // }
-    // if (taskData.type === 'meeting' && taskData.details.endTime instanceof Date) {
-    //    taskData.details.endTime = Timestamp.fromDate(taskData.details.endTime);
-    // }
-     // Dates for hotel/flight are strings (YYYY-MM-DD), no conversion needed unless storing as Timestamps
+export const saveAgentTask = async (taskData: Omit<AgentTaskPayload, 'createdAt' | 'updatedAt'>): Promise<string> => {
 
   const taskPayloadWithTimestamp: AgentTaskPayload = {
     ...taskData,
     createdAt: serverTimestamp() as Timestamp, // Add server timestamp
-    result: taskData.result || null,
-    error: taskData.error || null,
+    updatedAt: serverTimestamp() as Timestamp, // Also set updatedAt on creation
+    result: taskData.result !== undefined ? taskData.result : null, // Ensure null if undefined
+    error: taskData.error !== undefined ? taskData.error : null, // Ensure null if undefined
   };
 
   try {
@@ -112,8 +105,10 @@ export const saveAgentTask = async (taskData: Omit<AgentTaskPayload, 'createdAt'
     console.log("Agent task saved successfully with ID:", docRef.id);
     return docRef.id;
   } catch (error) {
+    // Log the data that failed to save for easier debugging
     console.error("Error saving agent task:", error);
-    throw new Error("Could not save agent task to database.");
+    console.error("Task data that failed to save:", JSON.stringify(taskPayloadWithTimestamp, null, 2)); // Log the data payload
+    throw new Error("Could not save agent task to database."); // Keep original error message
   }
 };
 
@@ -122,16 +117,18 @@ export const saveAgentTask = async (taskData: Omit<AgentTaskPayload, 'createdAt'
  * @param taskId The ID of the task document to update.
  * @param updates An object containing the fields to update (e.g., { status: 'confirmed', result: {...} }).
  */
-export const updateAgentTask = async (taskId: string, updates: Partial<Pick<AgentTaskPayload, 'status' | 'result' | 'error'>>): Promise<void> => {
+export const updateAgentTask = async (taskId: string, updates: Partial<Pick<AgentTaskPayload, 'status' | 'result' | 'error' | 'details'>>): Promise<void> => {
     const taskRef = doc(db, "agentTasks", taskId);
     try {
-        await setDoc(taskRef, {
+        // Use updateDoc for partial updates
+        await updateDoc(taskRef, {
             ...updates,
-            updatedAt: serverTimestamp() // Add/update an 'updatedAt' field
-        }, { merge: true });
+            updatedAt: serverTimestamp() // Always update the 'updatedAt' field
+        });
         console.log(`Agent task ${taskId} updated successfully.`);
     } catch (error) {
         console.error(`Error updating agent task ${taskId}:`, error);
-        throw new Error("Could not update agent task.");
+        console.error("Update data:", JSON.stringify(updates, null, 2));
+        throw new Error(`Could not update agent task ${taskId}.`);
     }
 };

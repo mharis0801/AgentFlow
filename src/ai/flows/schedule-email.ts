@@ -67,6 +67,14 @@ const scheduleEmailFlow = ai.defineFlow<
     let taskId: string | undefined = undefined;
     let finalResult: ScheduleEmailOutput;
 
+    // Prepare email details for saving (can be done before tool execution)
+    const taskDetailsToSave = {
+        to: emailDetails.to,
+        subject: emailDetails.subject,
+        // Optionally include a snippet of the body or omit it for privacy
+        // bodySnippet: emailDetails.body.substring(0, 100) + '...',
+    };
+
     try {
       // Input is already validated by the calling function
 
@@ -87,39 +95,61 @@ const scheduleEmailFlow = ai.defineFlow<
          taskId = await saveAgentTask({
              userId: userId,
              type: 'email',
-             // No prompt to save
-             details: validatedInput, // Save the sent details
-             status: 'completed', // Or 'sent'
+             details: taskDetailsToSave, // Save the prepared details
+             status: 'sent', // Use 'sent' or 'completed'
              result: { messageId: toolOutput.messageId },
+             error: null, // Ensure error is null on success
          });
          finalResult.taskId = taskId;
       } else {
-          // Throw an error if the tool failed, as this is unexpected in this direct flow
-          throw new Error('Failed to send the email via the tool.');
+          // If the tool itself reports failure (e.g., simulated error)
+          const toolFailureMsg = toolOutput.details || 'Failed to send email via the tool.';
+           taskId = await saveAgentTask({
+               userId: userId,
+               type: 'email',
+               details: taskDetailsToSave,
+               status: 'failed',
+               error: toolFailureMsg,
+               result: null, // Ensure result is null on failure
+           });
+           finalResult = {
+               success: false,
+               details: toolFailureMsg,
+               messageId: undefined,
+               taskId: taskId,
+           };
+           // Do not throw here if you want to return the failed state gracefully
+           // throw new Error(toolFailureMsg);
       }
        return finalResult;
 
     } catch (error: any) {
+      // This catch block handles errors *during* the flow execution
+      // (e.g., validation errors, tool execution errors not caught above, Firestore errors)
       console.error('Error in scheduleEmailFlow:', error);
       let errorMessage = 'An unexpected error occurred during email sending.';
       if (error instanceof z.ZodError) { // Error during tool input validation
         errorMessage = `Invalid data format for email tool: ${error.errors.map(e => e.message).join(', ')}`;
       } else if (error.message) {
-        errorMessage = error.message; // Capture tool execution error
+        errorMessage = error.message; // Capture tool execution error or Firestore error
       }
 
-       // Attempt to save failed task
-       try {
-           taskId = await saveAgentTask({
-               userId: userId,
-               type: 'email',
-               // No prompt
-               details: emailDetails, // Save the intended details
-               status: 'failed',
-               error: errorMessage,
-           });
-       } catch (saveError) {
-           console.error("Failed to save error task to Firestore:", saveError);
+       // Attempt to save failed task, *only if* it wasn't already saved as failed above
+       if (taskId === undefined) { // Check if taskId is still undefined
+         try {
+             taskId = await saveAgentTask({
+                 userId: userId,
+                 type: 'email',
+                 details: taskDetailsToSave, // Save the intended details
+                 status: 'failed',
+                 error: errorMessage,
+                 result: null,
+             });
+         } catch (saveError: any) {
+            // Log the detailed original save error before re-throwing
+             console.error("Failed to save error task to Firestore (Original Error):", saveError);
+             errorMessage = `${errorMessage}. Additionally, failed to save error status: ${saveError.message}`;
+         }
        }
 
        // Throw the error to be caught by the frontend

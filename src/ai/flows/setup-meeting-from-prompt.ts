@@ -79,7 +79,7 @@ export async function setupMeeting(input: SetupMeetingInput): Promise<SetupMeeti
 
 // Helper function to convert ISO string dates to Firestore Timestamps
 // Note: Firestore Timestamps are needed for querying/ordering by date effectively
-const convertDetailsToTimestamps = (details: MeetingDetails): MeetingDetails & { startTime: Timestamp; endTime: Timestamp } => {
+const convertDetailsToTimestamps = (details: MeetingDetails): Omit<MeetingDetails, 'startTime' | 'endTime'> & { startTime: Timestamp; endTime: Timestamp } => {
     return {
         ...details,
         startTime: Timestamp.fromDate(new Date(details.startTime)),
@@ -124,7 +124,7 @@ const setupMeetingFlow = ai.defineFlow<
       // 1. Simulate sending calendar invites via email tool
       let inviteSent = false;
       let confirmationMessage = `Meeting details processed for "${meetingDetails.title}".`;
-      let taskStatus: 'pending' | 'confirmed' | 'failed' = 'confirmed'; // Assume confirmed unless email fails
+      let taskStatus: 'pending' | 'confirmed' | 'failed' | 'scheduled' = 'scheduled'; // Assume scheduled initially
       let taskResult: Record<string, any> | null = null;
       let taskError: string | null = null;
 
@@ -155,15 +155,15 @@ const setupMeetingFlow = ai.defineFlow<
           if (toolOutput.success) {
               inviteSent = true;
               confirmationMessage = `Meeting "${meetingDetails.title}" scheduled and invitation sent to ${meetingDetails.attendees.length} attendees.`;
-              taskStatus = 'confirmed';
+              taskStatus = 'confirmed'; // Update status to confirmed as invite sent
               taskResult = { inviteSent: true, messageId: toolOutput.messageId };
               console.log('Simulated meeting invitation sent successfully.');
           } else {
-              throw new Error('Failed to send invitation email via tool.');
+              throw new Error(toolOutput.details || 'Failed to send invitation email via tool.');
           }
       } catch (toolError: any) {
           console.error('Failed to send meeting invitation:', toolError);
-          confirmationMessage = `Meeting "${meetingDetails.title}" details processed, but failed to send invitation email.`;
+          confirmationMessage = `Meeting "${meetingDetails.title}" scheduled, but failed to send invitation email.`;
           taskStatus = 'failed'; // Mark as failed if email send fails
           taskError = toolError.message || 'Failed to send invitation email.';
           // Don't rethrow here, save the task as failed instead
@@ -171,15 +171,22 @@ const setupMeetingFlow = ai.defineFlow<
 
 
        // 2. Save the task details to Firestore
-       taskId = await saveAgentTask({
-           userId: userId,
-           type: 'meeting',
-           // prompt: prompt, // Removed prompt
-           details: meetingDetailsForFirestore, // Save details with Timestamps
-           status: taskStatus,
-           result: taskResult,
-           error: taskError,
-       });
+       try {
+           taskId = await saveAgentTask({
+               userId: userId,
+               type: 'meeting',
+               details: meetingDetailsForFirestore, // Save details with Timestamps
+               status: taskStatus,
+               result: taskResult,
+               error: taskError,
+           });
+           console.log(`Meeting task saved with ID: ${taskId} and status: ${taskStatus}`);
+       } catch (saveError: any) {
+           // Log the detailed original save error before re-throwing
+           console.error("Failed to save meeting task to Firestore (Original Error):", saveError);
+           // Throw a new error indicating both scheduling and saving failed
+           throw new Error(`Meeting processed (status: ${taskStatus}), but failed to save task: ${saveError.message}`);
+       }
 
 
       finalResult = {
@@ -191,6 +198,7 @@ const setupMeetingFlow = ai.defineFlow<
       return finalResult;
 
     } catch(error: any) {
+         // This catches errors *before* or *during* the Firestore save attempt in the try block above
          console.error("Error in setupMeetingFlow:", error);
          let errorMessage = 'An unexpected error occurred during meeting setup.';
           if (error instanceof z.ZodError) { // Should be caught earlier, but good fallback
@@ -199,23 +207,38 @@ const setupMeetingFlow = ai.defineFlow<
                errorMessage = error.message;
           }
 
-         // Attempt to save failed task if error occurred before saving attempt
+         // Attempt to save failed task *only if* no task ID was assigned yet
          if (!taskId) {
              try {
+                 // Convert details just before saving the error record
+                 const detailsForErrorSave = meetingDetails ? convertDetailsToTimestamps(meetingDetails) : {};
                  taskId = await saveAgentTask({
                      userId: userId,
                      type: 'meeting',
-                     // prompt: prompt, // Removed prompt
-                     details: meetingDetails ? convertDetailsToTimestamps(meetingDetails) : {}, // Save partial details if available
+                     details: detailsForErrorSave,
                      status: 'failed',
                      error: errorMessage,
                  });
-             } catch (saveError) {
-                 console.error("Failed to save error task to Firestore:", saveError);
+                 console.log(`Saved failed meeting task with ID: ${taskId}`);
+                 // Modify the error message slightly to indicate the task was at least recorded as failed
+                 errorMessage += ` (Task recorded as failed with ID: ${taskId})`;
+             } catch (saveError: any) {
+                 console.error("CRITICAL: Failed to save even the error task to Firestore:", saveError);
+                  // Append the critical save error message
+                 errorMessage += ` CRITICAL: Failed to save error task to Firestore: ${saveError.message}`;
              }
+         } else if (taskStatus !== 'failed') {
+            // If taskId exists but the status wasn't 'failed' (e.g., save failed), update it
+            try {
+                await updateAgentTask(taskId, { status: 'failed', error: errorMessage });
+                console.log(`Updated existing task ${taskId} to failed.`);
+            } catch (updateError) {
+                console.error(`Failed to update task ${taskId} to failed status after initial error:`, updateError);
+                 errorMessage += ` Failed to update task status to failed: ${updateError}`;
+            }
          }
 
-        // Throw the original error to be caught by the frontend caller
+        // Throw the (potentially augmented) error message to be caught by the frontend caller
         throw new Error(errorMessage);
     }
   }

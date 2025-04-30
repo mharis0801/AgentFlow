@@ -1,3 +1,4 @@
+
 "use client"; // Required because we use Link and hooks
 
 import React, { useState, useEffect } from "react";
@@ -16,7 +17,8 @@ interface ScheduledItemBase {
   userId: string;
   type: 'email' | 'meeting' | 'hotel' | 'flight';
   createdAt: Timestamp;
-  status: 'pending' | 'processing' | 'scheduled' | 'confirmed' | 'failed' | 'completed' | string; // Allow string for flexibility but type known statuses
+  // Expanded status to cover search states better
+  status: 'pending' | 'processing' | 'scheduled' | 'confirmed' | 'failed' | 'completed' | 'sent' | 'search_complete' | 'search_failed' | string;
   details: Record<string, any>; // Flexible details object
   result?: Record<string, any> | null; // Optional result object
   error?: string | null; // Optional error message
@@ -32,6 +34,7 @@ interface ScheduledEmail extends ScheduledItemBase {
   result?: {
     messageId?: string;
   } | null;
+  status: 'pending' | 'sent' | 'failed'; // Specific statuses for email
 }
 
 interface ScheduledMeeting extends ScheduledItemBase {
@@ -48,60 +51,47 @@ interface ScheduledMeeting extends ScheduledItemBase {
      inviteSent?: boolean;
      messageId?: string;
    } | null;
+   status: 'pending' | 'scheduled' | 'confirmed' | 'failed'; // Specific statuses for meeting
 }
 
-interface BookedHotel extends ScheduledItemBase {
+// Interface for Hotel Search Task
+interface HotelSearchTask extends ScheduledItemBase {
   type: 'hotel';
-  // Details might initially only contain search criteria
   details: {
-    city: string;
-    checkInDate: string; // Store as string YYYY-MM-DD
-    checkOutDate: string; // Store as string YYYY-MM-DD
-    numberOfGuests: number;
-    // These fields are added after successful booking
-    hotelName?: string;
-    confirmationNumber?: string;
-    address?: string;
-    rating?: number;
-    pricePerNightUSD?: number;
-    chosenHotel?: Record<string, any>; // Store the chosen hotel object before booking attempt
-  };
-   result?: {
-     confirmationNumber?: string;
-     message?: string;
-   } | null;
-}
-
-interface BookedFlight extends ScheduledItemBase {
-  type: 'flight';
-  // Details might initially only contain search criteria
-  details: {
-    departureCity: string;
-    arrivalCity: string;
-    departureDate: string; // Store as string YYYY-MM-DD
-    numberOfPassengers: number;
-    // These fields are added after successful booking
-    confirmationNumber?: string;
-    bookedFlightDetails?: { // Store the full details of the booked flight
-      id: string;
-      airline: string;
-      flightNumber: string;
-      departureAirport: string;
-      arrivalAirport: string;
-      departureTime: string; // ISO String
-      arrivalTime: string;   // ISO String
-      durationMinutes: number;
-      priceUSD: number;
+    searchCriteria: { // Store the original search criteria
+        city: string;
+        checkInDate: string; // Store as string YYYY-MM-DD
+        checkOutDate: string; // Store as string YYYY-MM-DD
+        numberOfGuests: number;
     };
-     chosenFlight?: Record<string, any>; // Store the chosen flight object before booking attempt
   };
    result?: {
-     confirmationNumber?: string;
-     message?: string;
+     resultsFound?: number; // Store how many hotels were found
    } | null;
+   // Status reflects the search operation itself
+   status: 'pending' | 'completed' | 'failed';
 }
 
-type ScheduledItem = ScheduledEmail | ScheduledMeeting | BookedHotel | BookedFlight;
+// Interface for Flight Search Task
+interface FlightSearchTask extends ScheduledItemBase {
+  type: 'flight';
+  details: {
+     searchCriteria: { // Store the original search criteria
+        departureCity: string;
+        arrivalCity: string;
+        departureDate: string; // Store as string YYYY-MM-DD
+        numberOfPassengers: number;
+    };
+  };
+   result?: {
+     resultsFound?: number; // Store how many flights were found
+   } | null;
+   // Status reflects the search operation itself
+   status: 'pending' | 'completed' | 'failed';
+}
+
+// Union type includes the new search task types
+type ScheduledItem = ScheduledEmail | ScheduledMeeting | HotelSearchTask | FlightSearchTask;
 
 
 export default function DashboardPage() {
@@ -111,10 +101,10 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   const quickActions = [
-    { href: "/schedule-email", label: "Schedule Email", icon: Mail },
+    { href: "/schedule-email", label: "Send Email", icon: Mail }, // Changed label
     { href: "/setup-meeting", label: "Setup Meeting", icon: Calendar },
-    { href: "/book-hotel", label: "Book Hotel", icon: Hotel },
-    { href: "/book-flight", label: "Book Flight", icon: Plane },
+    { href: "/book-hotel", label: "Search Hotels", icon: Hotel }, // Keep label as Search
+    { href: "/book-flight", label: "Search Flights", icon: Plane }, // Keep label as Search
   ];
 
   useEffect(() => {
@@ -131,7 +121,7 @@ export default function DashboardPage() {
     const q = query(
       tasksCollectionRef,
       where("userId", "==", user.uid),
-      orderBy("createdAt", "desc")
+      orderBy("createdAt", "desc") // Show newest tasks first
     );
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
@@ -166,12 +156,14 @@ export default function DashboardPage() {
   }, [user]); // Re-run effect when user changes
 
   // Helper to format Firestore Timestamps or date strings
-   const formatDate = (dateInput: Timestamp | string | undefined, formatType: 'date' | 'dateTime' = 'dateTime'): string => {
+   const formatDate = (dateInput: Timestamp | string | undefined | Date, formatType: 'date' | 'dateTime' = 'dateTime'): string => {
       if (!dateInput) return 'N/A';
       try {
           let date: Date;
           if (dateInput instanceof Timestamp) {
               date = dateInput.toDate();
+          } else if (dateInput instanceof Date) {
+              date = dateInput;
           } else {
               date = new Date(dateInput); // Try parsing string (ISO, YYYY-MM-DD)
           }
@@ -179,18 +171,19 @@ export default function DashboardPage() {
           if (isNaN(date.getTime())) return String(dateInput); // Return original if invalid
 
           if (formatType === 'date') {
-              // Check if it looks like just a date string (YYYY-MM-DD)
-               if (typeof dateInput === 'string' && dateInput.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                  // Adjust for potential timezone issues when creating Date from YYYY-MM-DD
-                   const [year, month, day] = dateInput.split('-').map(Number);
-                   date = new Date(Date.UTC(year, month - 1, day));
-                   return format(date, 'PPP', { timeZone: 'UTC' }); // Format as UTC date
-               }
-              return format(date, 'PPP'); // Format Date only (e.g., October 10th, 2023)
+              // Check if it looks like just a date string (YYYY-MM-DD) and parse as UTC
+              if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+                   // Add time part to ensure it's parsed as local time zone, then format
+                    date = new Date(dateInput + 'T00:00:00');
+                    if (isNaN(date.getTime())) return String(dateInput); // Fallback if parsing failed
+                    return format(date, 'PPP'); // Format Date only (e.g., October 10th, 2023)
+              }
+               return format(date, 'PPP'); // Format Date only (e.g., October 10th, 2023)
           }
           // Default to dateTime format
           return format(date, 'PPp'); // Format Date and Time (e.g., Oct 10, 2023, 9:00:00 AM)
-      } catch {
+      } catch(e) {
+          console.error("Error formatting date:", dateInput, e);
           return String(dateInput); // Fallback
       }
    };
@@ -200,9 +193,11 @@ export default function DashboardPage() {
         switch (status?.toLowerCase()) {
             case 'confirmed':
             case 'completed':
-            case 'sent': // Assuming 'sent' is a success state for email
+            case 'sent':
+            case 'search_complete': // Added status for successful search
                 return 'text-green-600';
             case 'failed':
+            case 'search_failed': // Added status for failed search
                 return 'text-destructive';
             case 'pending':
             case 'processing':
@@ -216,7 +211,9 @@ export default function DashboardPage() {
 
    // Helper to get display text for status
    const getStatusText = (status: ScheduledItem['status']): string => {
-       return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';
+        if (!status) return 'Unknown';
+        // Replace underscores and capitalize
+        return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
    };
 
 
@@ -227,68 +224,58 @@ export default function DashboardPage() {
 
     switch (item.type) {
       case 'email':
+        const emailItem = item as ScheduledEmail;
         return (
           <>
-            <p><strong>To:</strong> {item.details.to || 'N/A'}</p>
-            <p><strong>Subject:</strong> {item.details.subject || 'N/A'}</p>
+            <p><strong>To:</strong> {emailItem.details.to || 'N/A'}</p>
+            <p><strong>Subject:</strong> {emailItem.details.subject || 'N/A'}</p>
             <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span></p>
              {item.status === 'failed' && item.error && <p className="text-xs text-destructive"><strong>Error:</strong> {item.error}</p>}
-             {item.status === 'completed' && item.result?.messageId && <p className="text-xs text-muted-foreground">Msg ID: {item.result.messageId}</p>}
+             {item.status === 'sent' && item.result?.messageId && <p className="text-xs text-muted-foreground">Msg ID: {item.result.messageId}</p>}
           </>
         );
       case 'meeting':
+         const meetingItem = item as ScheduledMeeting;
         return (
           <>
-            <p><strong>Title:</strong> {item.details.title || 'N/A'}</p>
-            <p><strong>Attendees:</strong> {(item.details.attendees || []).join(', ')}</p>
-            <p><strong>Time:</strong> {formatDate(item.details.startTime)} - {formatDate(item.details.endTime)}</p>
-            {item.details.location && <p><strong>Location:</strong> {item.details.location}</p>}
-             <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span> {item.result?.inviteSent ? '(Invite Sent)' : item.status === 'confirmed' ? '(Invite Pending/Failed)' : ''}</p>
+            <p><strong>Title:</strong> {meetingItem.details.title || 'N/A'}</p>
+            <p><strong>Attendees:</strong> {(meetingItem.details.attendees || []).join(', ')}</p>
+            <p><strong>Time:</strong> {formatDate(meetingItem.details.startTime)} - {formatDate(meetingItem.details.endTime)}</p>
+            {meetingItem.details.location && <p><strong>Location:</strong> {meetingItem.details.location}</p>}
+             <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span> {item.result?.inviteSent ? '(Invite Sent)' : item.status === 'confirmed' ? '(Invite Send Failed)' : ''}</p>
              {item.status === 'failed' && item.error && <p className="text-xs text-destructive"><strong>Error:</strong> {item.error}</p>}
           </>
         );
       case 'hotel':
+         const hotelTask = item as HotelSearchTask;
+         const criteria = hotelTask.details.searchCriteria;
         return (
           <>
-            {item.details.hotelName ? (
-              <>
-                <p><strong>Hotel:</strong> {item.details.hotelName} (in {item.details.city || 'N/A'})</p>
-                {item.details.confirmationNumber && <p><strong>Confirmation:</strong> <span className="font-mono bg-muted px-1 rounded">{item.details.confirmationNumber}</span></p>}
-                <p><strong>Dates:</strong> {formatDate(item.details.checkInDate, 'date')} - {formatDate(item.details.checkOutDate, 'date')}</p>
-                <p><strong>Guests:</strong> {item.details.numberOfGuests || 'N/A'}</p>
-              </>
-            ) : (
-              <>
-                <p><strong>Booking Request:</strong> Hotel in {item.details.city || 'N/A'}</p>
-                <p><strong>Dates:</strong> {formatDate(item.details.checkInDate, 'date')} - {formatDate(item.details.checkOutDate, 'date')}</p>
-                <p><strong>Guests:</strong> {item.details.numberOfGuests || 'N/A'}</p>
-              </>
-            )}
-            <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span></p>
+            <p><strong>Search Request:</strong> Hotel in {criteria?.city || 'N/A'}</p>
+            <p><strong>Dates:</strong> {formatDate(criteria?.checkInDate, 'date')} - {formatDate(criteria?.checkOutDate, 'date')}</p>
+            <p><strong>Guests:</strong> {criteria?.numberOfGuests || 'N/A'}</p>
+            <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span> {item.result?.resultsFound !== undefined ? `(${item.result.resultsFound} found)` : ''}</p>
             {item.status === 'failed' && item.error && <p className="text-xs text-destructive"><strong>Error:</strong> {item.error}</p>}
+             {/* Link to the search page with pre-filled criteria could be added here */}
+             <Link href={`/book-hotel?city=${encodeURIComponent(criteria?.city || '')}&checkIn=${criteria?.checkInDate || ''}&checkOut=${criteria?.checkOutDate || ''}&guests=${criteria?.numberOfGuests || ''}`}>
+                 <Button variant="link" size="sm" className="p-0 h-auto text-xs">Repeat Search</Button>
+             </Link>
           </>
         );
      case 'flight':
-        const bookedDetails = item.details.bookedFlightDetails;
+         const flightTask = item as FlightSearchTask;
+         const flightCriteria = flightTask.details.searchCriteria;
         return (
           <>
-            {bookedDetails ? (
-               <>
-                <p><strong>Flight:</strong> {bookedDetails.flightNumber} ({bookedDetails.departureAirport} <Plane className="inline h-4 w-4 mx-1"/> {bookedDetails.arrivalAirport})</p>
-                <p><strong>Airline:</strong> {bookedDetails.airline}</p>
-                <p><strong>Time:</strong> Departs {formatDate(bookedDetails.departureTime)}, Arrives {formatDate(bookedDetails.arrivalTime)}</p>
-                 {item.details.confirmationNumber && <p><strong>Confirmation:</strong> <span className="font-mono bg-muted px-1 rounded">{item.details.confirmationNumber}</span></p>}
-                 <p><strong>Passengers:</strong> {item.details.numberOfPassengers || 'N/A'}</p>
-               </>
-            ) : (
-                 <>
-                   <p><strong>Booking Request:</strong> Flight from {item.details.departureCity || 'N/A'} to {item.details.arrivalCity || 'N/A'}</p>
-                   <p><strong>Date:</strong> {formatDate(item.details.departureDate, 'date')}</p>
-                    <p><strong>Passengers:</strong> {item.details.numberOfPassengers || 'N/A'}</p>
-                 </>
-            )}
-             <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span></p>
+            <p><strong>Search Request:</strong> Flight from {flightCriteria?.departureCity || 'N/A'} to {flightCriteria?.arrivalCity || 'N/A'}</p>
+            <p><strong>Date:</strong> {formatDate(flightCriteria?.departureDate, 'date')}</p>
+            <p><strong>Passengers:</strong> {flightCriteria?.numberOfPassengers || 'N/A'}</p>
+            <p><strong>Status:</strong> <span className={`font-medium ${statusColor}`}>{statusText}</span> {item.result?.resultsFound !== undefined ? `(${item.result.resultsFound} found)` : ''}</p>
              {item.status === 'failed' && item.error && <p className="text-xs text-destructive"><strong>Error:</strong> {item.error}</p>}
+              {/* Link to the search page with pre-filled criteria could be added here */}
+              <Link href={`/book-flight?from=${encodeURIComponent(flightCriteria?.departureCity || '')}&to=${encodeURIComponent(flightCriteria?.arrivalCity || '')}&date=${flightCriteria?.departureDate || ''}&pax=${flightCriteria?.numberOfPassengers || ''}`}>
+                  <Button variant="link" size="sm" className="p-0 h-auto text-xs">Repeat Search</Button>
+              </Link>
           </>
         );
       default:
@@ -320,12 +307,12 @@ export default function DashboardPage() {
   return (
     <div className="container mx-auto py-8">
        <h1 className="text-3xl font-bold mb-1 text-foreground">Welcome, {user?.displayName || user?.email || 'User'}!</h1>
-       <p className="text-muted-foreground mb-6">Manage your tasks and bookings.</p>
+       <p className="text-muted-foreground mb-6">Manage your tasks and searches.</p>
 
       <Card className="mb-8 shadow-md">
         <CardHeader>
           <CardTitle>Quick Actions</CardTitle>
-          <CardDescription>Start a new task with one click.</CardDescription>
+          <CardDescription>Start a new task or search.</CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {quickActions.map((action) => (
@@ -341,8 +328,8 @@ export default function DashboardPage() {
 
        <Card className="shadow-md border-primary/20">
          <CardHeader>
-           <CardTitle>Tasks & Bookings History</CardTitle>
-           <CardDescription>View your processed tasks, scheduled items, and confirmed bookings.</CardDescription>
+           <CardTitle>Task History</CardTitle>
+           <CardDescription>View your processed tasks and search history.</CardDescription>
          </CardHeader>
          <CardContent>
            {isLoading ? (
@@ -357,7 +344,7 @@ export default function DashboardPage() {
              </div>
            ) : upcomingItems.length === 0 ? (
              <div className="text-center text-muted-foreground py-12">
-               <p>No tasks or bookings found.</p>
+               <p>No tasks or searches found.</p>
                <p className="mt-2">Use the quick actions above to get started!</p>
              </div>
            ) : (
@@ -369,7 +356,7 @@ export default function DashboardPage() {
                      </div>
                      <div className="flex-1 text-sm space-y-1">
                        {renderItemDetails(item)}
-                       <p className="text-xs text-muted-foreground">Created: {formatDate(item.createdAt)} (ID: {item.id})</p>
+                       <p className="text-xs text-muted-foreground">Created: {formatDate(item.createdAt)} (ID: {item.id.substring(0,8)}...)</p>
                      </div>
                       {/* Optional: Add action buttons like 'Cancel' or 'View Details' */}
                       {/* <Button variant="ghost" size="sm">View</Button> */}

@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { format } from "date-fns";
-import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle, Building, Clock, Ticket, Users, DollarSign, AlertCircle, ExternalLink } from "lucide-react";
+import { CalendarIcon, Loader2, PlaneTakeoff, CheckCircle, Building, Clock, Ticket, Users, DollarSign, AlertCircle, ExternalLink, Search } from "lucide-react"; // Added Search icon
 import Link from "next/link"; // For external booking links
 
 import { searchFlights, SearchFlightsOutput } from "@/ai/flows/search-flights"; // Import the search flow
@@ -27,7 +27,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
-import { Flight } from "@/services/flight-booking"; // Import Flight type for result structure
+// Ensure Flight type is imported if needed for explicit typing, though SearchFlightsOutput might suffice
+// import { Flight } from "@/services/flight-booking";
 
 // Zod schema for form validation on the client-side
 const FormSchema = z.object({
@@ -37,7 +38,7 @@ const FormSchema = z.object({
   numberOfPassengers: z.coerce.number().int().positive({ message: "Number of passengers must be a positive number." }),
 });
 
-// Type for the flight search results array
+// Type for the flight search results array (using the flow's output type)
 type FlightSearchResults = SearchFlightsOutput;
 
 export default function SearchFlightPage() {
@@ -83,10 +84,18 @@ export default function SearchFlightPage() {
        // Call the search flow function
       const response = await searchFlights(inputData);
       setResults(response); // Set the array of flight results
-      toast({
-        title: "Flight Search Successful",
-        description: `Found ${response.length} flight options.`,
-      });
+       if (response.length > 0) {
+            toast({
+                title: "Flight Search Successful",
+                description: `Found ${response.length} flight options.`,
+            });
+       } else {
+            toast({
+                title: "No Flights Found",
+                description: "Your search returned no results. Try different criteria.",
+                variant: "default", // Use default variant for no results
+            });
+       }
     } catch (error: any) {
       console.error("Detailed error searching flights:", error); // Log the full error object
       let errorMessage = "An unexpected error occurred while searching for flights.";
@@ -96,6 +105,9 @@ export default function SearchFlightPage() {
          errorMessage = error;
       } else if (error?.details) {
           errorMessage = error.details;
+      } else if (error?.response?.data?.errors?.[0]?.detail) {
+          // Attempt to get Amadeus specific error detail
+          errorMessage = error.response.data.errors[0].detail;
       }
       setError(errorMessage); // Set error state
       setResults([]); // Ensure results are empty on error
@@ -115,7 +127,7 @@ export default function SearchFlightPage() {
        try {
            const date = new Date(dateTimeString);
            if (isNaN(date.getTime())) return dateTimeString; // Fallback
-           return format(date, "PPp");
+           return format(date, "PPp"); // e.g., Sep 15, 2024, 10:30 AM
        } catch {
            return dateTimeString; // Fallback
        }
@@ -123,10 +135,10 @@ export default function SearchFlightPage() {
 
    // Format duration in minutes to hours and minutes string
    const formatDuration = (minutes: number | undefined): string => {
-     if (minutes === undefined || minutes < 0) return 'N/A';
+     if (minutes === undefined || minutes <= 0) return 'N/A'; // Check for 0 or negative
      const hours = Math.floor(minutes / 60);
      const mins = minutes % 60;
-     return `${hours}h ${mins}m`;
+     return `${hours > 0 ? `${hours}h ` : ''}${mins}m`; // Show hours only if > 0
    };
 
   return (
@@ -135,9 +147,9 @@ export default function SearchFlightPage() {
 
       <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
-          <CardTitle>AI Flight Finder</CardTitle>
+          <CardTitle>Flight Finder</CardTitle>
           <CardDescription>
-            Enter your flight details below. The AI will find available options (simulation).
+            Enter your flight details below to search real-time availability.
           </CardDescription>
         </CardHeader>
         <Form {...form}>
@@ -153,6 +165,7 @@ export default function SearchFlightPage() {
                     <FormControl>
                       <Input placeholder="e.g., New York, JFK" {...field} disabled={isLoading} />
                     </FormControl>
+                     <FormDescription>City name or IATA code.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -168,6 +181,7 @@ export default function SearchFlightPage() {
                     <FormControl>
                       <Input placeholder="e.g., Los Angeles, LAX" {...field} disabled={isLoading} />
                     </FormControl>
+                     <FormDescription>City name or IATA code.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -223,10 +237,11 @@ export default function SearchFlightPage() {
                 name="numberOfPassengers"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Number of Passengers</FormLabel>
+                    <FormLabel>Passengers (Adults)</FormLabel>
                     <FormControl>
                       <Input type="number" min="1" placeholder="e.g., 1" {...field} disabled={isLoading} />
                     </FormControl>
+                     <FormDescription>Number of adult travelers.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -241,7 +256,7 @@ export default function SearchFlightPage() {
                   </>
                 ) : (
                    <>
-                     <PlaneTakeoff className="mr-2 h-4 w-4"/> Search Flights
+                     <Search className="mr-2 h-4 w-4"/> Search Flights
                    </>
                 )}
               </Button>
@@ -250,6 +265,15 @@ export default function SearchFlightPage() {
         </Form>
       </Card>
 
+      {/* Loading State */}
+      {isLoading && (
+          <div className="text-center py-12">
+             <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+             <p className="mt-2 text-muted-foreground">Searching for flights...</p>
+          </div>
+      )}
+
+      {/* Error State */}
       {searchPerformed && !isLoading && error && (
           <Card className="max-w-2xl mx-auto mt-8 shadow-md border-destructive/50 bg-destructive/10">
               <CardHeader>
@@ -259,10 +283,12 @@ export default function SearchFlightPage() {
               </CardHeader>
               <CardContent>
                   <p className="text-destructive">{error}</p>
+                  <p className="text-xs text-destructive/80 mt-2">Please check your input or try again later. API services might be temporarily unavailable.</p>
               </CardContent>
           </Card>
       )}
 
+      {/* No Results State */}
       {searchPerformed && !isLoading && !error && results.length === 0 && (
          <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20 bg-muted/30">
               <CardHeader>
@@ -276,6 +302,7 @@ export default function SearchFlightPage() {
           </Card>
       )}
 
+       {/* Results Display */}
        {results.length > 0 && !error && !isLoading && (
          <div className="max-w-4xl mx-auto mt-8">
             <h2 className="text-2xl font-semibold mb-4 text-center text-foreground">Search Results</h2>
@@ -285,14 +312,14 @@ export default function SearchFlightPage() {
                         <CardHeader className="pb-3">
                             <CardTitle className="flex justify-between items-center">
                                 <span className="text-lg text-primary">
-                                    {flight.departureAirport} <PlaneTakeoff className="inline h-5 w-5 mx-1"/> {flight.arrivalAirport}
+                                    {flight.departureAirport || 'N/A'} <PlaneTakeoff className="inline h-5 w-5 mx-1"/> {flight.arrivalAirport || 'N/A'}
                                 </span>
                                 <span className="text-sm font-mono bg-primary/10 text-primary px-2 py-1 rounded">
-                                    {flight.flightNumber}
+                                    {flight.flightNumber || 'N/A'}
                                 </span>
                             </CardTitle>
                              <CardDescription className="flex items-center gap-1 text-sm pt-1">
-                                 <Building className="h-4 w-4"/> {flight.airline}
+                                 <Building className="h-4 w-4"/> {flight.airline || 'N/A'}
                              </CardDescription>
                         </CardHeader>
                         <CardContent className="text-sm space-y-2">
@@ -310,18 +337,19 @@ export default function SearchFlightPage() {
                              </div>
                              <div className="flex items-center gap-2">
                                 <DollarSign className="h-4 w-4 text-muted-foreground" />
-                                <span className="font-semibold">Price/Person: ${flight.priceUSD.toFixed(2)}</span>
+                                <span className="font-semibold">Total Price: ${flight.priceUSD ? flight.priceUSD.toFixed(2) : 'N/A'}</span>
+                                {/* Add per-passenger price if needed: priceUSD / numberOfPassengers */}
                              </div>
                         </CardContent>
                          <CardFooter className="pt-4 justify-end">
                               {flight.bookingUrl ? (
                                  <Link href={flight.bookingUrl} target="_blank" rel="noopener noreferrer" passHref>
                                      <Button size="sm" variant="outline" className="border-primary text-primary hover:bg-primary/10">
-                                         View on {flight.airline} <ExternalLink className="ml-2 h-4 w-4" />
+                                         View Offer <ExternalLink className="ml-2 h-4 w-4" />
                                      </Button>
                                  </Link>
                               ) : (
-                                 <Button size="sm" variant="outline" disabled>Booking Unavailable</Button>
+                                 <Button size="sm" variant="outline" disabled>Booking Link Unavailable</Button>
                               )}
                          </CardFooter>
                     </Card>

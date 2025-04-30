@@ -1,146 +1,149 @@
 
 /**
- * @fileOverview Mock service for finding flights.
- * **NOTE:** This uses mock data. A real implementation requires integrating
- * with a flight booking API (e.g., Amadeus, Sabre, Skyscanner API) or a
- * third-party aggregator service. These often require commercial agreements.
+ * @fileOverview Service for finding flights using the Amadeus API.
+ * Requires environment variables: AMADEUS_API_KEY and AMADEUS_API_SECRET.
  */
 
-/**
- * Represents the details of a flight.
- */
+import Amadeus from 'amadeus';
+import { Flight, FlightSearchCriteria } from '@/services/flight-booking'; // Keep existing interfaces
+import { getIataCode } from './location-service'; // Import IATA code helper
+
+// Define the Flight interface (if not already defined elsewhere)
 export interface Flight {
-  /**
-   * A unique identifier for the flight option (can be composite).
-   */
   id: string;
-  /**
-   * The airline operating the flight (e.g., "United Airlines").
-   */
   airline: string;
-  /**
-   * The flight number (e.g., "UA456").
-   */
   flightNumber: string;
-  /**
-   * The departure airport code (IATA).
-   */
   departureAirport: string;
-  /**
-   * The arrival airport code (IATA).
-   */
   arrivalAirport: string;
-  /**
-   * The departure date and time in ISO 8601 format (UTC).
-   */
   departureTime: string;
-  /**
-   * The arrival date and time in ISO 8601 format (UTC).
-   */
   arrivalTime: string;
-  /**
-   * Duration of the flight in minutes.
-   */
   durationMinutes: number;
-  /**
-   * Price per passenger in USD (for simulation).
-   */
   priceUSD: number;
-  /**
-   * Optional URL to book the flight (e.g., a deep link to the airline's site).
-   */
-  bookingUrl?: string;
+  bookingUrl?: string; // Amadeus sometimes provides deep links
 }
 
-/**
- * Represents search criteria for flight bookings.
- */
+// Define the FlightSearchCriteria interface (if not already defined elsewhere)
 export interface FlightSearchCriteria {
-  /**
-   * The departure city or airport code (IATA).
-   */
-  departureCity: string; // e.g., "New York", "JFK"
-  /**
-   * The arrival city or airport code (IATA).
-   */
-  arrivalCity: string; // e.g., "Los Angeles", "LAX"
-  /**
-   * The departure date (YYYY-MM-DD format).
-   */
-  departureDate: string;
-  /**
-   * The number of passengers.
-   */
+  departureCity: string;
+  arrivalCity: string;
+  departureDate: string; // YYYY-MM-DD
   numberOfPassengers: number;
 }
 
+
+let amadeus: Amadeus | null = null;
+
+function getAmadeusClient(): Amadeus {
+    if (!amadeus) {
+        const apiKey = process.env.AMADEUS_API_KEY;
+        const apiSecret = process.env.AMADEUS_API_SECRET;
+
+        if (!apiKey || !apiSecret) {
+            throw new Error("Amadeus API Key or Secret not found in environment variables.");
+        }
+
+        amadeus = new Amadeus({
+            clientId: apiKey,
+            clientSecret: apiSecret,
+            // Use hostname: 'test.api.amadeus.com' for testing environment
+             hostname: 'production' === process.env.NODE_ENV ? 'api.amadeus.com' : 'test.api.amadeus.com'
+        });
+         console.log(`Amadeus client initialized for ${amadeus.hostname}`);
+    }
+    return amadeus;
+}
+
+
 /**
- * Simulates searching for flights based on the provided search criteria using an external API.
+ * Searches for flights using the Amadeus API based on the provided criteria.
  *
  * @param searchCriteria The criteria to use for finding flights.
  * @returns A promise that resolves to an array of Flight objects.
+ * @throws Will throw an error if API keys are missing or the API call fails.
  */
 export async function searchFlightsAPI(searchCriteria: FlightSearchCriteria): Promise<Flight[]> {
-  console.log("Simulating flight search API call with criteria:", searchCriteria);
+    console.log("Searching flights via Amadeus API with criteria:", searchCriteria);
+    const client = getAmadeusClient();
 
-  // !! ================================================== !!
-  // !! IMPORTANT: Real Implementation Required            !!
-  // !! ================================================== !!
-  // !! Replace this with actual API calls.
-  // !! ================================================== !!
+    try {
+         // Get IATA codes for cities (implement this service)
+         const originLocationCode = await getIataCode(searchCriteria.departureCity);
+         const destinationLocationCode = await getIataCode(searchCriteria.arrivalCity);
 
-  // --- Start Simulation ---
+         if (!originLocationCode || !destinationLocationCode) {
+             throw new Error(`Could not find IATA codes for cities: ${searchCriteria.departureCity} or ${searchCriteria.arrivalCity}`);
+         }
 
-  // Simulate network delay
-  await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 500));
+        const response = await client.shopping.flightOffersSearch.get({
+            originLocationCode: originLocationCode,
+            destinationLocationCode: destinationLocationCode,
+            departureDate: searchCriteria.departureDate,
+            adults: searchCriteria.numberOfPassengers.toString(), // API expects string
+            max: 10, // Limit results for performance/cost
+            currencyCode: 'USD'
+        });
 
-  const mockResults: Flight[] = [];
-  const departureBase = new Date(`${searchCriteria.departureDate}T00:00:00Z`);
+        // Check for non-array response or empty data
+        if (!response || !response.data || !Array.isArray(response.data)) {
+            console.warn("Amadeus API returned unexpected response format or no data:", response);
+            return []; // Return empty array if no flights found or error in response structure
+        }
 
-  if (searchCriteria.departureCity && searchCriteria.arrivalCity) {
-    const airlines = ["Skylink Airways", "Horizon Jet", "Apex Airlines"];
-    const basePrice = 150 + Math.random() * 300;
+        console.log(`Amadeus API returned ${response.data.length} flight offers.`);
 
-    for (let i = 0; i < Math.floor(2 + Math.random() * 5); i++) { // Generate 2-6 mock flights
-      const departureHour = Math.floor(7 + Math.random() * 12); // 7 AM - 6 PM
-      const flightDuration = Math.floor(90 + Math.random() * 300); // 1.5 - 5 hours duration
+        // Map the Amadeus response to our Flight interface
+        const flights: Flight[] = response.data.map((offer: any): Flight | null => {
+           try {
+                const firstSegment = offer.itineraries?.[0]?.segments?.[0];
+                const lastSegment = offer.itineraries?.[0]?.segments?.[offer.itineraries[0].segments.length - 1];
+                const price = offer.price?.total ? parseFloat(offer.price.total) : 0;
+                const airlineCode = firstSegment?.carrierCode;
+                // Attempt to get airline name from dictionary, fallback to code
+                const airlineName = response.dictionaries?.carriers?.[airlineCode] || airlineCode || 'Unknown Airline';
+                const durationStr = offer.itineraries?.[0]?.duration; // e.g., PT5H30M
 
-      const departureTime = new Date(departureBase);
-      departureTime.setUTCHours(departureHour, Math.floor(Math.random() * 60), 0, 0);
+                let durationMinutes = 0;
+                if (durationStr) {
+                    const durationMatch = durationStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
+                    if (durationMatch) {
+                        const hours = durationMatch[1] ? parseInt(durationMatch[1]) : 0;
+                        const minutes = durationMatch[2] ? parseInt(durationMatch[2]) : 0;
+                        durationMinutes = hours * 60 + minutes;
+                    }
+                }
 
-      const arrivalTime = new Date(departureTime);
-      arrivalTime.setUTCMinutes(arrivalTime.getUTCMinutes() + flightDuration);
 
-      const airlineName = airlines[i % airlines.length];
-      const flightNum = `${airlineName.substring(0, 2).toUpperCase()}${Math.floor(100 + Math.random() * 900)}`;
-      const depAirport = searchCriteria.departureCity.length === 3 ? searchCriteria.departureCity.toUpperCase() : "DEP";
-      const arrAirport = searchCriteria.arrivalCity.length === 3 ? searchCriteria.arrivalCity.toUpperCase() : "ARR";
+                if (!firstSegment || !lastSegment || price === 0) {
+                    console.warn("Skipping incomplete flight offer:", offer.id);
+                    return null; // Skip incomplete offers
+                }
 
-      // Simulate a booking URL (replace with actual deep links from API)
-      const bookingUrl = `https://example-airline-booking.com/book?flight=${flightNum}&dep=${depAirport}&arr=${arrAirport}&date=${searchCriteria.departureDate}&pax=${searchCriteria.numberOfPassengers}`;
+                return {
+                    id: offer.id, // Use Amadeus offer ID
+                    airline: airlineName,
+                    flightNumber: firstSegment.number || 'N/A', // Flight number might be per segment
+                    departureAirport: firstSegment.departure?.iataCode || 'N/A',
+                    arrivalAirport: lastSegment.arrival?.iataCode || 'N/A',
+                    departureTime: firstSegment.departure?.at || 'N/A',
+                    arrivalTime: lastSegment.arrival?.at || 'N/A',
+                    durationMinutes: durationMinutes,
+                    priceUSD: price,
+                    // Check for deep links (structure might vary)
+                    bookingUrl: offer.pricingOptions?.fareDetails?.[0]?.sliceDiceIndicator === 'SLICE_AND_DICE' ? `https://www.google.com/flights?q=${airlineCode}${firstSegment.number}%20${originLocationCode}%20${destinationLocationCode}%20${searchCriteria.departureDate}` : undefined
+                };
+           } catch (mapError: any) {
+                console.error(`Error mapping flight offer ${offer.id}:`, mapError.message);
+                return null; // Skip offers that cause mapping errors
+           }
+        }).filter((flight): flight is Flight => flight !== null); // Filter out null values
 
-      mockResults.push({
-        id: `${flightNum}-${departureTime.toISOString()}`,
-        airline: airlineName,
-        flightNumber: flightNum,
-        departureAirport: depAirport,
-        arrivalAirport: arrAirport,
-        departureTime: departureTime.toISOString(),
-        arrivalTime: arrivalTime.toISOString(),
-        durationMinutes: flightDuration,
-        priceUSD: parseFloat((basePrice + (Math.random() * 100 - 50)).toFixed(2)),
-        bookingUrl: bookingUrl // Add the simulated booking URL
-      });
+        console.log(`Successfully mapped ${flights.length} flight offers.`);
+        return flights;
+
+    } catch (error: any) {
+        // Log detailed error from Amadeus if available
+        console.error("Error searching flights with Amadeus:", error?.response?.data || error?.description || error.message);
+         // Rethrow a more generic error or the specific one if needed
+        throw new Error(`Failed to fetch flight data from provider. ${error?.description?.detail || error.message}`);
     }
-  }
-
-   mockResults.sort((a, b) => new Date(a.departureTime).getTime() - new Date(b.departureTime).getTime());
-
-  console.log(`Simulated finding ${mockResults.length} flights via API.`);
-  return mockResults;
-  // --- End Simulation ---
 }
-
-// Note: The bookFlight function is removed as the flow now focuses on searching.
-// Booking would typically happen by redirecting the user via the bookingUrl.
-

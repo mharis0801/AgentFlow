@@ -1,143 +1,160 @@
 
 /**
- * @fileOverview Mock service for finding hotels.
- * **NOTE:** This uses mock data. A real implementation requires integrating
- * with a hotel booking API (e.g., Expedia Rapid API, Booking.com API, Amadeus)
- * or a GDS (Global Distribution System). These usually require partnerships
- * and commercial agreements.
+ * @fileOverview Service for finding hotels using the Amadeus API.
+ * Requires environment variables: AMADEUS_API_KEY and AMADEUS_API_SECRET.
  */
 
-/**
- * Represents the details of a hotel.
- */
+import Amadeus from 'amadeus';
+import { Hotel, HotelSearchCriteria } from '@/services/hotel-booking'; // Keep existing interfaces
+import { getIataCode } from './location-service'; // Import IATA code helper
+
+// Define the Hotel interface (if not already defined elsewhere)
 export interface Hotel {
-  /**
-   * A unique identifier for the hotel.
-   */
   id: string;
-  /**
-   * The name of the hotel.
-   */
   name: string;
-  /**
-   * The address of the hotel.
-   */
-  address: string;
-  /**
-   * The star rating of the hotel (e.g., 1 to 5).
-   */
-  rating: number; // e.g., 4.5
-   /**
-    * A short description or key amenity.
-    */
-   description: string;
-   /**
-    * Simulated price per night in USD.
-    */
-   pricePerNightUSD: number;
-   /**
-    * URL to a placeholder image for the hotel.
-    */
-   imageUrl: string;
-   /**
-    * Optional URL to book the hotel (e.g., a deep link to a booking site).
-    */
-   bookingUrl?: string;
+  address: string; // Full address might not always be available, construct if possible
+  rating: number; // May need conversion or might be absent
+  description?: string; // Less common in basic availability search
+  pricePerNightUSD: number; // Extracted from the offer
+  imageUrl?: string; // Amadeus doesn't typically provide images directly in search
+  bookingUrl?: string; // May need to construct a link
 }
 
-/**
- * Represents search criteria for hotel bookings.
- */
+// Define the HotelSearchCriteria interface (if not already defined elsewhere)
 export interface HotelSearchCriteria {
-  /**
-   * The city, region, or specific location.
-   */
   city: string;
-  /**
-   * The check-in date (YYYY-MM-DD format).
-   */
-  checkInDate: string;
-  /**
-   * The check-out date (YYYY-MM-DD format).
-   */
-  checkOutDate: string;
-  /**
-   * The number of guests.
-   */
+  checkInDate: string; // YYYY-MM-DD
+  checkOutDate: string; // YYYY-MM-DD
   numberOfGuests: number;
 }
 
-/**
- * Simulates searching for hotels based on the provided search criteria using an external API.
- *
- * @param searchCriteria The criteria to use for finding hotels.
- * @returns A promise that resolves to an array of Hotel objects.
- */
-export async function searchHotelsAPI(searchCriteria: HotelSearchCriteria): Promise<Hotel[]> {
-  console.log("Simulating hotel search API call with criteria:", searchCriteria);
+let amadeus: Amadeus | null = null;
 
-  // !! ================================================== !!
-  // !! IMPORTANT: Real Implementation Required            !!
-  // !! ================================================== !!
-  // !! Replace this with actual API calls.
-  // !! ================================================== !!
+function getAmadeusClient(): Amadeus {
+    if (!amadeus) {
+        const apiKey = process.env.AMADEUS_API_KEY;
+        const apiSecret = process.env.AMADEUS_API_SECRET;
 
-  // --- Start Simulation ---
+        if (!apiKey || !apiSecret) {
+            throw new Error("Amadeus API Key or Secret not found in environment variables.");
+        }
 
-  // Simulate network delay
-  await new Promise(resolve => setTimeout(resolve, 700 + Math.random() * 600));
-
-  const mockHotels: Hotel[] = [];
-  const checkIn = new Date(searchCriteria.checkInDate);
-  const checkOut = new Date(searchCriteria.checkOutDate);
-  const numberOfNights = Math.max(1, Math.round((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24)));
-
-  if (searchCriteria.city) {
-    const cityLower = searchCriteria.city.toLowerCase().replace(/\s+/g, '');
-    const basePrice = 80 + Math.random() * 250;
-
-    const hotelNames = [
-        `The Grand ${searchCriteria.city} Plaza`,
-        `Central ${searchCriteria.city} Boutique Hotel`,
-        `Riverside Inn ${searchCriteria.city}`,
-        `Cozy Nook B&B (${searchCriteria.city})`,
-        `${searchCriteria.city} Skyline Towers`
-    ];
-    const descriptions = [
-        "Luxury hotel in the heart of the city.",
-        "Charming boutique hotel with unique rooms.",
-        "Peaceful riverside location with great views.",
-        "Affordable and friendly bed & breakfast.",
-        "Modern hotel with stunning city views."
-    ];
-
-     for (let i = 0; i < Math.floor(3 + Math.random() * 6); i++) { // Generate 3-8 mock hotels
-         const rating = parseFloat((3.5 + Math.random() * 1.5).toFixed(1)); // 3.5 - 5.0 stars
-         const price = parseFloat((basePrice + (Math.random() * 100 - 50)).toFixed(2));
-         const hotelId = `mock-${cityLower}-${i + 1}${Date.now().toString().slice(-4)}`;
-
-         // Simulate a booking URL (replace with actual deep links from API)
-         const bookingUrl = `https://example-hotel-booking.com/hotels/${hotelId}?checkin=${searchCriteria.checkInDate}&checkout=${searchCriteria.checkOutDate}&guests=${searchCriteria.numberOfGuests}`;
-
-         mockHotels.push({
-           id: hotelId,
-           name: hotelNames[i % hotelNames.length],
-           address: `${200 + i * 150} ${cityLower.includes('river') ? 'River Rd' : 'Main St'}, ${searchCriteria.city}`,
-           rating: rating,
-           description: descriptions[i % descriptions.length],
-           pricePerNightUSD: price,
-           imageUrl: `https://picsum.photos/seed/${cityLower}${i+1}/300/200`, // Placeholder image
-           bookingUrl: bookingUrl // Add the simulated booking URL
-         });
-     }
-  }
-
-  console.log(`Simulated finding ${mockHotels.length} hotels via API in ${searchCriteria.city}.`);
-  return mockHotels;
-  // --- End Simulation ---
+        amadeus = new Amadeus({
+            clientId: apiKey,
+            clientSecret: apiSecret,
+            // Use hostname: 'test.api.amadeus.com' for testing environment
+            hostname: 'production' === process.env.NODE_ENV ? 'api.amadeus.com' : 'test.api.amadeus.com'
+        });
+         console.log(`Amadeus client initialized for ${amadeus.hostname}`);
+    }
+    return amadeus;
 }
 
 
-// Note: The bookHotel function is removed as the flow now focuses on searching.
-// Booking would typically happen by redirecting the user via the bookingUrl.
+/**
+ * Searches for hotels using the Amadeus API based on the provided criteria.
+ * Note: This uses the 'Hotel List' endpoint first to get hotel IDs, then 'Hotel Offers' for pricing.
+ * This is a common pattern but might incur multiple API calls.
+ *
+ * @param searchCriteria The criteria to use for finding hotels.
+ * @returns A promise that resolves to an array of Hotel objects with pricing.
+ * @throws Will throw an error if API keys are missing or the API call fails.
+ */
+export async function searchHotelsAPI(searchCriteria: HotelSearchCriteria): Promise<Hotel[]> {
+    console.log("Searching hotels via Amadeus API with criteria:", searchCriteria);
+    const client = getAmadeusClient();
 
+    try {
+        // 1. Get IATA code for the city
+        const cityCode = await getIataCode(searchCriteria.city);
+        if (!cityCode) {
+            throw new Error(`Could not find IATA code for city: ${searchCriteria.city}`);
+        }
+
+        // 2. Search for hotels in the city to get Hotel IDs
+        const hotelListResponse = await client.referenceData.locations.hotels.byCity.get({
+            cityCode: cityCode,
+            ratings: '4,5', // Example: Filter for 4 and 5-star hotels, adjust as needed
+            radius: 20, // Search radius in KM
+            radiusUnit: 'KM'
+        });
+
+        if (!hotelListResponse || !hotelListResponse.data || !Array.isArray(hotelListResponse.data) || hotelListResponse.data.length === 0) {
+            console.warn("Amadeus Hotel List returned no hotels for the city code:", cityCode);
+            return []; // No hotels found for the criteria
+        }
+
+        const hotelIds = hotelListResponse.data.map((hotel: any) => hotel.hotelId).slice(0, 10); // Limit IDs to avoid excessive offer calls
+        console.log(`Found ${hotelIds.length} potential hotel IDs in ${searchCriteria.city}. Fetching offers...`);
+
+        if (hotelIds.length === 0) {
+            return [];
+        }
+
+        // 3. Get offers (pricing) for the found hotel IDs
+        const hotelOffersResponse = await client.shopping.hotelOffersSearch.get({
+            hotelIds: hotelIds.join(','), // Join IDs into a comma-separated string
+            adults: searchCriteria.numberOfGuests.toString(),
+            checkInDate: searchCriteria.checkInDate,
+            checkOutDate: searchCriteria.checkOutDate,
+            currency: 'USD',
+            // Optional: paymentPolicy, boardType etc.
+        });
+
+
+         if (!hotelOffersResponse || !hotelOffersResponse.data || !Array.isArray(hotelOffersResponse.data)) {
+             console.warn("Amadeus Hotel Offers Search returned unexpected response format or no data:", hotelOffersResponse);
+             return [];
+         }
+
+         console.log(`Amadeus API returned ${hotelOffersResponse.data.length} hotel offers.`);
+
+        // 4. Map offers to our Hotel interface
+        const hotels: Hotel[] = hotelOffersResponse.data
+            .map((offer: any): Hotel | null => {
+               try {
+                    if (!offer.hotel || !offer.offers?.[0]?.price?.total) {
+                        console.warn("Skipping incomplete hotel offer:", offer.hotel?.hotelId);
+                        return null; // Skip if essential data is missing
+                    }
+
+                    const priceTotal = parseFloat(offer.offers[0].price.total);
+                    const checkInDate = new Date(searchCriteria.checkInDate);
+                    const checkOutDate = new Date(searchCriteria.checkOutDate);
+                    const nights = Math.max(1, (checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24));
+                    const pricePerNight = priceTotal / nights;
+
+                    // Construct address (might be incomplete)
+                    const ad = offer.hotel.address;
+                    const addressString = [ad?.lines?.[0], ad?.cityName, ad?.postalCode, ad?.countryCode]
+                                         .filter(Boolean).join(', ');
+
+                   // Construct a basic booking link (adjust as needed for real deeplinks if available)
+                    const bookingUrl = `https://www.google.com/travel/hotels/${encodeURIComponent(searchCriteria.city)}/entity/${offer.hotel.hotelId}?q=${encodeURIComponent(offer.hotel.name || searchCriteria.city)}&checkin=${searchCriteria.checkInDate}&checkout=${searchCriteria.checkOutDate}&guests=${searchCriteria.numberOfGuests}`;
+
+
+                    return {
+                        id: offer.hotel.hotelId,
+                        name: offer.hotel.name || 'Unknown Hotel Name',
+                        address: addressString || 'Address not available',
+                        rating: offer.hotel.rating ? parseInt(offer.hotel.rating) : 0, // Rating might be string
+                        description: offer.offers?.[0]?.room?.description?.text?.substring(0, 100) + '...' || undefined, // Use room description if available
+                        pricePerNightUSD: parseFloat(pricePerNight.toFixed(2)),
+                        imageUrl: `https://picsum.photos/seed/${offer.hotel.hotelId}/300/200`, // Placeholder image
+                        bookingUrl: bookingUrl,
+                    };
+               } catch(mapError: any) {
+                    console.error(`Error mapping hotel offer ${offer.hotel?.hotelId}:`, mapError.message);
+                    return null; // Skip offers causing mapping errors
+               }
+            })
+             .filter((hotel): hotel is Hotel => hotel !== null); // Filter out nulls
+
+        console.log(`Successfully mapped ${hotels.length} hotel offers with pricing.`);
+        return hotels;
+
+    } catch (error: any) {
+        console.error("Error searching hotels with Amadeus:", error?.response?.data || error?.description || error.message);
+        throw new Error(`Failed to fetch hotel data from provider. ${error?.description?.detail || error.message}`);
+    }
+}

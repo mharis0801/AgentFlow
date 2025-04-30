@@ -1,12 +1,12 @@
 
 
-// import '@/ai/flows/schedule-email-from-prompt.ts'; // Removed as replaced by form-based flow
-import '@/ai/flows/search-hotels.ts'; // Renamed from book-hotel...
-import '@/ai/flows/setup-meeting-from-prompt.ts'; // Still using this for meeting setup
-import '@/ai/flows/search-flights.ts'; // Renamed from find-and-book...
-import '@/ai/flows/schedule-email.ts'; // Add new flow for form-based email
+// Form-based flows (primary interaction method now)
+import '@/ai/flows/search-hotels.ts';
+import '@/ai/flows/setup-meeting-from-prompt.ts'; // Still used for form-based meeting setup
+import '@/ai/flows/search-flights.ts';
+import '@/ai/flows/schedule-email.ts';
 
 // Import tools so they are registered with Genkit
-import '@/ai/tools/email-reader';
+// These are now used by the form-based flows directly, not via LLM tool calling
+import '@/ai/tools/email-reader'; // Might be used for future features (e.g., proactive tasks)
 import '@/ai/tools/send-email';
-

@@ -1,136 +1,208 @@
+
 'use server';
 /**
- * @fileOverview Defines a Genkit tool for reading emails.
- * This tool simulates reading emails from a dedicated inbox for the AI agent.
- * **NOTE:** This is a simulation. A real implementation requires integrating
- * with an email service provider API (e.g., Gmail API, Outlook API)
- * and handling OAuth 2.0 authentication securely.
+ * @fileOverview Defines a Genkit tool for reading unread emails using IMAP with Gmail.
+ * Requires environment variables: GMAIL_EMAIL, GMAIL_APP_PASSWORD.
+ * Requires IMAP to be enabled in the target Gmail account settings.
+ * @see https://support.google.com/mail/answer/7126229?hl=en for enabling IMAP.
  */
 
 import { ai } from '@/ai/ai-instance';
 import { z } from 'genkit';
+import Imap from 'imap';
+import { simpleParser } from 'mailparser';
+import { inspect } from 'util'; // For debugging complex objects
 
 // Define a simplified email structure for the tool's output
 const EmailSchema = z.object({
-  id: z.string().describe('A unique identifier for the email.'),
-  from: z.string().email().describe('The sender\'s email address.'),
+  id: z.string().describe('A unique identifier for the email (UID).'),
+  from: z.string().describe('The sender\'s address (e.g., "Sender Name <sender@example.com>").'),
   subject: z.string().describe('The subject line of the email.'),
-  body: z.string().describe('The content/body of the email.'),
+  body: z.string().describe('The plain text content/body of the email.'),
   receivedAt: z.string().datetime().describe('The time the email was received (ISO format).'),
-  read: z.boolean().describe('Whether the email has been marked as read.'),
+  // read: z.boolean().describe('Whether the email has been marked as read.'), // We fetch unread, so this is implicitly false
 });
+
+// Ensure environment variables are set
+if (!process.env.GMAIL_EMAIL || !process.env.GMAIL_APP_PASSWORD) {
+    console.warn(`
+        ****************************************************
+        * WARNING: GMAIL_EMAIL or GMAIL_APP_PASSWORD       *
+        * environment variables not set.                   *
+        * Email reading will fail.                         *
+        * Please set them in your .env file.               *
+        * Requires IMAP enabled in Gmail settings.         *
+        ****************************************************
+    `);
+}
+
+const imapConfig: Imap.Config = {
+    user: process.env.GMAIL_EMAIL!,
+    password: process.env.GMAIL_APP_PASSWORD!,
+    host: 'imap.gmail.com',
+    port: 993,
+    tls: true,
+    tlsOptions: { rejectUnauthorized: false } // Adjust as needed for your environment
+};
+
+
+// Helper function to connect and search IMAP
+function fetchUnreadEmails(maxEmails: number): Promise<z.infer<typeof EmailSchema>[]> {
+     if (!process.env.GMAIL_EMAIL || !process.env.GMAIL_APP_PASSWORD) {
+        console.error("IMAP connection skipped: Missing Gmail credentials in environment.");
+        return Promise.resolve([]); // Return empty if no credentials
+     }
+
+    return new Promise((resolve, reject) => {
+        const imap = new Imap(imapConfig);
+        const emails: z.infer<typeof EmailSchema>[] = [];
+
+        function openInbox(cb: (err: Error | null, box?: Imap.Box) => void) {
+            imap.openBox('INBOX', false, cb); // false = readOnly is false (we might want to mark as read later)
+        }
+
+        imap.once('ready', () => {
+            console.log('IMAP connection ready. Opening INBOX...');
+            openInbox((err, box) => {
+                if (err) {
+                    console.error('Error opening INBOX:', err);
+                    imap.end();
+                    return reject(new Error(`Failed to open INBOX: ${err.message}`));
+                }
+                if (!box) {
+                    imap.end();
+                    return reject(new Error('INBOX could not be opened (box is null).'));
+                }
+                console.log('INBOX opened. Searching for unread messages...');
+                // Search for unread messages
+                imap.search(['UNSEEN'], (searchErr, results) => {
+                    if (searchErr) {
+                        console.error('Error searching for unread emails:', searchErr);
+                        imap.end();
+                        return reject(new Error(`Failed to search emails: ${searchErr.message}`));
+                    }
+
+                    if (!results || results.length === 0) {
+                        console.log('No unread messages found.');
+                        imap.end();
+                        return resolve([]);
+                    }
+
+                    console.log(`Found ${results.length} unread messages. Fetching details for max ${maxEmails}...`);
+                    // Fetch the most recent 'maxEmails' UIDs
+                    const uidsToFetch = results.slice(-maxEmails);
+
+                    if (uidsToFetch.length === 0) {
+                        imap.end();
+                        return resolve([]);
+                    }
+
+                    const f = imap.fetch(uidsToFetch, { bodies: '', markSeen: false }); // Fetch full message, don't mark as read yet
+
+                    f.on('message', (msg, seqno) => {
+                         console.log('Processing message #%d', seqno);
+                         let messageData = '';
+                         let attributes: Imap.ImapMessageAttributes | null = null;
+
+                         msg.on('body', (stream, info) => {
+                            stream.on('data', (chunk) => {
+                                messageData += chunk.toString('utf8');
+                            });
+                         });
+                         msg.once('attributes', (attrs) => {
+                            attributes = attrs;
+                            console.log(`Attributes for message #%d: UID=${attrs.uid}, Date=${attrs.date}`);
+                         });
+                         msg.once('end', () => {
+                             console.log('Finished receiving message #%d', seqno);
+                             if (attributes && messageData) {
+                                 simpleParser(messageData, (parseErr, parsed) => {
+                                     if (parseErr) {
+                                         console.error(`Error parsing email UID ${attributes?.uid}:`, parseErr);
+                                         // Continue processing other emails
+                                     } else if (attributes) {
+                                         emails.push({
+                                             id: attributes.uid.toString(), // Use UID as the stable ID
+                                             from: parsed.from?.text || 'Unknown Sender',
+                                             subject: parsed.subject || '(No Subject)',
+                                             body: parsed.text || '(No Body Content)', // Prefer plain text body
+                                             receivedAt: attributes.date.toISOString(),
+                                         });
+                                          console.log(`Successfully parsed email UID ${attributes.uid}`);
+                                     }
+                                 });
+                             } else {
+                                 console.warn(`Missing attributes or data for message #${seqno}`);
+                             }
+                         });
+                    });
+
+                    f.once('error', (fetchErr) => {
+                        console.error('Fetch error:', fetchErr);
+                         // Don't reject immediately, try to resolve with what was fetched
+                         // reject(new Error(`Failed to fetch email details: ${fetchErr.message}`));
+                    });
+
+                    f.once('end', () => {
+                        console.log('Finished fetching all messages.');
+                        imap.end();
+                        resolve(emails.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime())); // Sort newest first
+                    });
+                });
+            });
+        });
+
+        imap.once('error', (err) => {
+            console.error('IMAP connection error:', err);
+             // Handle specific auth errors
+            if (err.message.includes('Invalid credentials') || err.message.includes('Log in')) {
+                reject(new Error('IMAP authentication failed. Check GMAIL_EMAIL and GMAIL_APP_PASSWORD, and ensure IMAP is enabled with App Password access.'));
+            } else {
+                reject(new Error(`IMAP connection error: ${err.message}`));
+            }
+        });
+
+        imap.once('end', () => {
+            console.log('IMAP connection ended.');
+        });
+
+        console.log('Attempting IMAP connection...');
+        imap.connect();
+    });
+}
+
+// TODO: Function to mark an email as read by UID (implement if needed after processing)
+// async function markEmailAsRead(uid: string): Promise<void> { ... }
 
 export const readEmailsTool = ai.defineTool(
   {
     name: 'readEmails',
-    description: 'Reads unread emails from the dedicated assistant inbox. Use this to check for new requests or information relevant to scheduling tasks. Returns a list of emails, most recent first.',
+    description: 'Reads recent unread emails from the dedicated assistant inbox via IMAP. Use this to check for new requests or information relevant to scheduling tasks. Returns a list of emails, most recent first.',
     inputSchema: z.object({
       maxEmails: z.number().int().positive().optional().default(5).describe('The maximum number of unread emails to retrieve.'),
     }),
     outputSchema: z.array(EmailSchema).describe('An array of retrieved unread email objects.'),
   },
   async (input) => {
-    console.log(`Simulating reading up to ${input.maxEmails} unread emails...`);
+    console.log(`Reading up to ${input.maxEmails} unread emails via IMAP...`);
 
-    // !! ================================================== !!
-    // !! IMPORTANT: Real Implementation Required            !!
-    // !! ================================================== !!
-    // !! This section needs to be replaced with actual logic to:
-    // !! 1. Authenticate with an email provider (e.g., Google Workspace/Gmail API, Microsoft Graph API).
-    // !!    - This typically involves setting up OAuth 2.0 credentials in Google Cloud/Azure.
-    // !!    - Securely store and refresh tokens.
-    // !! 2. Use the provider's API to list unread emails in the dedicated inbox.
-    // !!    - Filter emails by 'unread' status.
-    // !!    - Fetch necessary details (ID, sender, subject, body snippet, received date).
-    // !!    - Handle pagination if necessary.
-    // !! 3. **Crucially:** After successfully processing an email (e.g., creating a task),
-    // !!    use the API to mark the email as read or move it to a processed folder
-    // !!    to prevent reprocessing it on subsequent runs.
-    // !! 4. Implement robust error handling for API calls and authentication issues.
-    // !! ================================================== !!
-
-    // --- Start Simulation ---
-    const allMockEmails = [
-      {
-        id: 'email901',
-        from: 'urgent.client@example.com',
-        subject: 'URGENT: Reschedule Tomorrow\'s Meeting',
-        body: 'Hi AgentFlow, something came up. Can we push our 10 AM meeting tomorrow to 3 PM instead? Let me know ASAP.',
-        receivedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(), // 30 mins ago
-        read: false,
-      },
-       {
-        id: 'email1001',
-        from: 'hotel.confirm@booking.example',
-        subject: 'Your Hotel Reservation is Confirmed!',
-        body: 'Booking Confirmation: #ABC987 at The Grand Plaza, Check-in: 2024-11-15, Check-out: 2024-11-18.',
-        receivedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString(), // 1.5 hours ago
-        read: false,
-      },
-      {
-        id: 'email123',
-        from: 'user@example.com',
-        subject: 'Schedule lunch meeting',
-        body: 'Hi AgentFlow, please schedule a lunch meeting with marketing@example.com for next Wednesday at 1 PM EST. Topic: Q4 planning.',
-        receivedAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(), // 2 hours ago
-        read: false,
-      },
-      {
-        id: 'email456',
-        from: 'travel.agent@example.com',
-        subject: 'Your Flight Confirmation to LAX',
-        body: 'Dear User, your flight UA456 to LAX on Dec 10th is confirmed. See attached details.',
-        receivedAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(), // 4 hours ago
-        read: false, // Assume unread for demo
-      },
-       {
-        id: 'email1122',
-        from: 'newsletter@tech.example',
-        subject: 'Weekly Tech Roundup',
-        body: 'This week in tech: AI advancements, new gadgets, and more...',
-        receivedAt: new Date(Date.now() - 6 * 3600 * 1000).toISOString(), // 6 hours ago
-        read: false,
-      },
-      {
-        id: 'email789',
-        from: 'another.user@sample.net',
-        subject: 'Re: Follow up',
-        body: 'Just wanted to follow up on the report status.',
-        receivedAt: new Date(Date.now() - 10 * 3600 * 1000).toISOString(), // 10 hours ago
-        read: true, // Assume already read
-      },
-      {
-        id: 'email888',
-        from: 'support@software.example',
-        subject: 'Your support ticket #12345 has been updated',
-        body: 'A new response has been added to your support ticket regarding...',
-        receivedAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(), // 1 day ago
-        read: true, // Assume already read
-      }
-    ];
-
-    // Filter mock emails to return only unread ones, up to the specified limit
-    const unreadEmails = allMockEmails
-      .filter(email => !email.read)
-      .sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime()) // Sort newest first
-      .slice(0, input.maxEmails);
-
-    console.log(`Simulated finding ${unreadEmails.length} unread emails.`);
-
-    // Simulate marking as read (in a real scenario, this happens *after* processing)
-    // For this simulation, we don't modify the 'read' status of the original mock data.
-    // In a real implementation:
-    // for (const email of unreadEmails) {
-    //   try {
-    //     await emailService.markAsRead(email.id);
-    //     console.log(`Marked email ${email.id} as read.`);
-    //   } catch (error) {
-    //     console.error(`Failed to mark email ${email.id} as read:`, error);
-    //     // Decide how to handle failures - retry later? Log?
-    //   }
-    // }
-     // --- End Simulation ---
-
-    return unreadEmails;
+    try {
+        const unreadEmails = await fetchUnreadEmails(input.maxEmails);
+        console.log(`Successfully fetched ${unreadEmails.length} unread emails.`);
+        // In a real scenario, after processing these emails (e.g., creating tasks),
+        // you would call another function/tool to mark them as read using their UIDs.
+        // Example: for (const email of unreadEmails) { await markEmailAsRead(email.id); }
+        return unreadEmails;
+    } catch (error: any) {
+        console.error("Error in readEmailsTool:", error);
+        // Return empty array or rethrow, depending on desired behavior
+        // Rethrowing makes the failure explicit to the calling flow
+        throw new Error(`Failed to read emails: ${error.message}`);
+         // return []; // Alternatively, return empty on failure
+    }
   }
 );
+
+// Note: Marking emails as read is crucial to avoid reprocessing. This needs
+// to be implemented as a separate step or tool to be called *after* an email
+// has been successfully processed by an agent flow.

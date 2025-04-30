@@ -28,6 +28,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { useAuth } from "@/contexts/auth-context";
 import { cn } from "@/lib/utils";
 import Image from "next/image"; // Use next/image for optimized images
+// import { Hotel } from "@/services/hotel-booking"; // Import if needed for explicit typing
 
 // Zod schema for form validation on the client-side
 const FormSchema = z.object({
@@ -41,7 +42,7 @@ const FormSchema = z.object({
 });
 
 
-// Type for the hotel search results array
+// Type for the hotel search results array (using the flow's output type)
 type HotelSearchResults = SearchHotelsOutput;
 
 export default function SearchHotelPage() {
@@ -90,10 +91,18 @@ export default function SearchHotelPage() {
       // Call the search flow function
       const response = await searchHotels(inputData);
       setResults(response); // Set the array of hotel results
-      toast({
-        title: "Hotel Search Successful",
-        description: `Found ${response.length} hotel options.`,
-      });
+       if (response.length > 0) {
+           toast({
+               title: "Hotel Search Successful",
+               description: `Found ${response.length} hotel options.`,
+           });
+       } else {
+            toast({
+                title: "No Hotels Found",
+                description: "Your search returned no results. Try different criteria.",
+                variant: "default",
+            });
+       }
     } catch (error: any) {
       console.error("Detailed error searching hotels:", error); // Log the full error object
        let errorMessage = "An unexpected error occurred while searching for hotels.";
@@ -103,6 +112,9 @@ export default function SearchHotelPage() {
           errorMessage = error;
        } else if (error?.details) {
            errorMessage = error.details;
+       } else if (error?.response?.data?.errors?.[0]?.detail) {
+          // Attempt to get Amadeus specific error detail
+          errorMessage = error.response.data.errors[0].detail;
        }
       setError(errorMessage); // Set error state
       setResults([]); // Ensure results are empty on error
@@ -122,9 +134,9 @@ export default function SearchHotelPage() {
 
       <Card className="max-w-2xl mx-auto shadow-md border-primary/20">
         <CardHeader>
-          <CardTitle>AI Hotel Finder</CardTitle>
+          <CardTitle>Hotel Finder</CardTitle>
           <CardDescription>
-            Enter your desired hotel details below. The AI will find available options (simulation).
+            Enter your desired hotel details below to search real-time availability.
           </CardDescription>
         </CardHeader>
         <Form {...form}>
@@ -140,6 +152,7 @@ export default function SearchHotelPage() {
                     <FormControl>
                       <Input placeholder="e.g., New York City, Paris" {...field} disabled={isLoading} />
                     </FormControl>
+                     <FormDescription>Enter the city where you want to stay.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -246,7 +259,7 @@ export default function SearchHotelPage() {
                       <Input type="number" min="1" placeholder="e.g., 2" {...field} disabled={isLoading} />
                     </FormControl>
                      <FormDescription>
-                        Enter the total number of guests.
+                        Enter the total number of adult guests.
                      </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -271,6 +284,15 @@ export default function SearchHotelPage() {
         </Form>
       </Card>
 
+        {/* Loading State */}
+        {isLoading && (
+            <div className="text-center py-12">
+               <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+               <p className="mt-2 text-muted-foreground">Searching for hotels...</p>
+            </div>
+        )}
+
+        {/* Error State */}
         {searchPerformed && !isLoading && error && (
           <Card className="max-w-2xl mx-auto mt-8 shadow-md border-destructive/50 bg-destructive/10">
               <CardHeader>
@@ -280,10 +302,12 @@ export default function SearchHotelPage() {
               </CardHeader>
               <CardContent>
                   <p className="text-destructive">{error}</p>
+                  <p className="text-xs text-destructive/80 mt-2">Please check your input or try again later. API services might be temporarily unavailable.</p>
               </CardContent>
           </Card>
         )}
 
+       {/* No Results State */}
        {searchPerformed && !isLoading && !error && results.length === 0 && (
           <Card className="max-w-2xl mx-auto mt-8 shadow-md border-primary/20 bg-muted/30">
                <CardHeader>
@@ -298,37 +322,41 @@ export default function SearchHotelPage() {
        )}
 
 
+       {/* Results Display */}
        {results.length > 0 && !error && !isLoading && (
           <div className="max-w-4xl mx-auto mt-8">
              <h2 className="text-2xl font-semibold mb-4 text-center text-foreground">Search Results</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {results.map((hotel) => (
                       <Card key={hotel.id} className="shadow-md border-primary/20 overflow-hidden hover:shadow-lg transition-shadow duration-200 flex flex-col">
-                         <div className="relative w-full h-48">
-                           <Image
-                               src={hotel.imageUrl}
-                               alt={`Image of ${hotel.name}`}
-                               layout="fill"
-                               objectFit="cover"
-                               unoptimized // Using picsum, no need for Next.js optimization here
-                           />
+                         <div className="relative w-full h-48 bg-muted">
+                            {/* Use a placeholder or remove if images aren't reliably available */}
+                            <Image
+                                src={hotel.imageUrl || `https://picsum.photos/seed/${hotel.id}/300/200`} // Fallback image
+                                alt={`Image of ${hotel.name}`}
+                                layout="fill"
+                                objectFit="cover"
+                                unoptimized // Use unoptimized for picsum
+                                onError={(e) => { e.currentTarget.src = `https://picsum.photos/seed/${hotel.id}/300/200`; e.currentTarget.onerror = null; }} // Handle potential image load errors
+                            />
                          </div>
                          <CardHeader className="pb-2">
-                            <CardTitle className="text-lg text-primary">{hotel.name}</CardTitle>
+                            <CardTitle className="text-lg text-primary">{hotel.name || 'Hotel Name Unavailable'}</CardTitle>
                             <div className="flex items-center gap-1 text-sm text-muted-foreground pt-1">
                                 <Star className="h-4 w-4 text-yellow-500 fill-yellow-400" />
-                                <span>{hotel.rating.toFixed(1)}</span>
+                                {/* Display rating if available and > 0 */}
+                                <span>{hotel.rating && hotel.rating > 0 ? hotel.rating.toFixed(1) : 'N/A'}</span>
                             </div>
                          </CardHeader>
                          <CardContent className="text-sm space-y-1 flex-grow">
-                              <p className="text-muted-foreground line-clamp-2">{hotel.description}</p>
+                              {hotel.description && <p className="text-muted-foreground line-clamp-2">{hotel.description}</p>}
                               <div className="flex items-center gap-1 pt-1">
                                   <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  <span className="text-xs">{hotel.address}</span>
+                                  <span className="text-xs">{hotel.address || 'Address not available'}</span>
                               </div>
                               <div className="flex items-center gap-1 pt-1">
                                  <DollarSign className="h-4 w-4 text-muted-foreground" />
-                                 <span className="font-semibold">Price/Night: ${hotel.pricePerNightUSD.toFixed(2)}</span>
+                                 <span className="font-semibold">Avg Price/Night: ${hotel.pricePerNightUSD ? hotel.pricePerNightUSD.toFixed(2) : 'N/A'}</span>
                              </div>
                          </CardContent>
                           <CardFooter className="pt-4 justify-end">
@@ -339,7 +367,7 @@ export default function SearchHotelPage() {
                                       </Button>
                                   </Link>
                                ) : (
-                                  <Button size="sm" variant="outline" disabled>Booking Unavailable</Button>
+                                  <Button size="sm" variant="outline" disabled>Booking Link Unavailable</Button>
                                )}
                           </CardFooter>
                      </Card>

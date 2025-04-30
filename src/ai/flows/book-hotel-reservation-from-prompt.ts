@@ -1,3 +1,4 @@
+
 'use server';
 /**
  * @fileOverview This file defines a Genkit flow for booking hotel reservations based on structured user input.
@@ -12,7 +13,7 @@
 import {ai} from '@/ai/ai-instance';
 import {z} from 'genkit';
 import { findHotels, bookHotel, Hotel, HotelSearchCriteria} from '@/services/hotel-booking'; // Import simulated services
-import { saveAgentTask, updateAgentTask } from '@/services/firestore'; // Import Firestore service
+import { saveAgentTask, updateAgentTask, AgentTaskPayload } from '@/services/firestore'; // Import Firestore service
 
 // Define the structured input schema for the form
 const BookHotelReservationInputSchema = z.object({
@@ -74,20 +75,21 @@ async (input) => {
    let initialTaskSaved = false;
 
    // 1. Save initial pending task to Firestore
+   const initialTaskPayload: Omit<AgentTaskPayload, 'createdAt' | 'updatedAt'> = {
+       userId: userId,
+       type: 'hotel',
+       details: searchCriteria,
+       status: 'pending', // Start as pending
+   };
    try {
-       taskId = await saveAgentTask({
-           userId: userId,
-           type: 'hotel',
-           details: searchCriteria,
-           status: 'pending', // Start as pending
-       });
+       taskId = await saveAgentTask(initialTaskPayload);
        initialTaskSaved = true;
        console.log(`Initial pending hotel task saved with ID: ${taskId}`);
    } catch (saveError: any) {
       // Log the detailed original error before re-throwing
-       console.error("Failed to save initial pending task (Original Error):", saveError);
+       console.error("Failed to save initial pending hotel task (Original Error):", saveError);
        // Re-throw with a more specific message, including the original one
-       throw new Error(`Failed to initiate hotel booking task: ${saveError.message || 'Unknown Firestore save error'}`);
+       throw new Error(`Failed to initiate hotel booking task: ${saveError.message || 'Could not save agent task to database.'}`);
    }
 
    // Helper function to update task status on failure
@@ -96,9 +98,12 @@ async (input) => {
            try {
                await updateAgentTask(taskId, { status: 'failed', error: errorMsg });
                console.log(`Hotel task ${taskId} updated to failed.`);
-           } catch (updateError) {
-               console.error(`Failed to update task ${taskId} to failed status:`, updateError);
+           } catch (updateError: any) {
+               // Log the secondary error but don't let it mask the original problem
+               console.error(`Failed to update task ${taskId} to failed status after initial error:`, updateError);
            }
+       } else {
+            console.error("Cannot update task to failed: taskId is undefined.");
        }
    };
 
@@ -109,22 +114,26 @@ async (input) => {
 
        if (!availableHotels || availableHotels.length === 0) {
            const noHotelsMsg = `No hotels found matching your criteria in ${searchCriteria.city} for the specified dates.`;
-           await updateTaskToFailed(noHotelsMsg);
+           await updateTaskToFailed(noHotelsMsg); // Update task before throwing
            throw new Error(noHotelsMsg);
        }
        console.log(`Found ${availableHotels.length} potential hotels.`);
 
        // 3. Select a hotel and attempt booking (simulate booking the first result).
-       //    In a real scenario, the AI might select based on rating, price, or user preferences.
        const hotelToBook = availableHotels[0];
        console.log(`Attempting to book hotel: ${hotelToBook.name}`);
 
        // Update task details with the chosen hotel before booking attempt
        if (taskId) {
-           await updateAgentTask(taskId, {
-               details: { ...searchCriteria, chosenHotel: hotelToBook },
-               status: 'processing' // Indicate booking attempt
-           });
+           try {
+               await updateAgentTask(taskId, {
+                   details: { ...searchCriteria, chosenHotel: hotelToBook },
+                   status: 'processing' // Indicate booking attempt
+               });
+           } catch (updateError: any) {
+              console.warn(`Failed to update task ${taskId} to processing status:`, updateError);
+              // Continue with booking attempt even if status update failed, but log warning
+           }
        }
 
        // Call the simulated booking service
@@ -132,9 +141,10 @@ async (input) => {
 
        // 4. Handle booking result
        if (!bookingResult.success || !bookingResult.confirmationNumber) {
-           console.error(`Simulated booking failed for ${hotelToBook.name}: ${bookingResult.message}`);
-           await updateTaskToFailed(bookingResult.message);
-           throw new Error(bookingResult.message); // Throw error to frontend
+           const bookingFailedMsg = bookingResult.message || `Simulated booking failed for ${hotelToBook.name}.`;
+           console.error(`Simulated hotel booking failed: ${bookingFailedMsg}`);
+           await updateTaskToFailed(bookingFailedMsg); // Update task before throwing
+           throw new Error(bookingFailedMsg); // Throw error to frontend
        }
 
        // 5. Booking successful - Update task in Firestore to 'confirmed'.
@@ -145,23 +155,36 @@ async (input) => {
            checkInDate: searchCriteria.checkInDate,
            checkOutDate: searchCriteria.checkOutDate,
            numberOfGuests: searchCriteria.numberOfGuests,
-           address: hotelToBook.address, // Include more details if needed
+           address: hotelToBook.address,
            rating: hotelToBook.rating,
            pricePerNightUSD: hotelToBook.pricePerNightUSD,
        };
+
+       // Combine original criteria with final booking details for storing in Firestore
+       const finalTaskDetails = {
+            ...searchCriteria, // Keep original search
+            ...bookingDetails, // Add confirmed booking details
+       };
+
        if (taskId) {
-           await updateAgentTask(taskId, {
-               status: 'confirmed',
-               details: bookingDetails, // Store final booking details
-               result: { confirmationNumber: bookingResult.confirmationNumber, message: bookingResult.message },
-               error: null, // Clear any previous error
-           });
-           console.log(`Hotel task ${taskId} updated to confirmed.`);
+           try {
+               await updateAgentTask(taskId, {
+                   status: 'confirmed',
+                   details: finalTaskDetails, // Store combined details
+                   result: { confirmationNumber: bookingResult.confirmationNumber, message: bookingResult.message },
+                   error: null, // Clear any previous error
+               });
+               console.log(`Hotel task ${taskId} updated to confirmed.`);
+           } catch (updateError: any) {
+               console.error(`Failed to update task ${taskId} to confirmed status:`, updateError);
+               // Decide if this failure is critical or just log it
+               // For now, let the flow succeed but log the error
+           }
        }
 
        // 6. Return the successful result to the frontend.
        const finalResult: BookHotelReservationOutput = {
-           ...bookingDetails,
+           ...bookingDetails, // Return only the core booking output fields
            message: bookingResult.message,
            taskId: taskId,
        };
@@ -170,10 +193,12 @@ async (input) => {
    } catch (error: any) {
        console.error("Error in bookHotelReservationFlow:", error);
        // Ensure the task is marked as failed if an error occurred after initial save
+       // but before the final update (e.g., during findHotels or bookHotel simulation)
        if (initialTaskSaved && taskId) { // Only update if task was initially saved
-           await updateTaskToFailed(error.message || 'An unexpected error occurred during hotel booking.');
+            await updateTaskToFailed(error.message || 'An unexpected error occurred during hotel booking.');
        }
        // Re-throw the error to be caught by the frontend caller
        throw error; // Throw the original error object
    }
 });
+

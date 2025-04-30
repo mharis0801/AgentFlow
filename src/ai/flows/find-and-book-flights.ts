@@ -1,3 +1,4 @@
+
 'use server';
 /**
  * @fileOverview An AI agent for finding and booking flights based on structured user input.
@@ -12,7 +13,7 @@
 import {ai} from '@/ai/ai-instance';
 import {z} from 'genkit';
 import {Flight, FlightSearchCriteria, findFlights, bookFlight} from '@/services/flight-booking'; // Import simulated services
-import { saveAgentTask, updateAgentTask } from '@/services/firestore'; // Import Firestore service
+import { saveAgentTask, updateAgentTask, AgentTaskPayload } from '@/services/firestore'; // Import Firestore service
 
 // Define the structured input schema for the form
 const FindAndBookFlightsInputSchema = z.object({
@@ -77,20 +78,21 @@ const findAndBookFlightsFlow = ai.defineFlow<
      let initialTaskSaved = false;
 
      // 1. Save initial pending task to Firestore
+     const initialTaskPayload: Omit<AgentTaskPayload, 'createdAt' | 'updatedAt'> = {
+            userId: userId,
+            type: 'flight',
+            details: searchCriteria,
+            status: 'pending', // Start as pending
+     };
      try {
-         taskId = await saveAgentTask({
-             userId: userId,
-             type: 'flight',
-             details: searchCriteria,
-             status: 'pending', // Start as pending
-         });
+         taskId = await saveAgentTask(initialTaskPayload);
          initialTaskSaved = true;
          console.log(`Initial pending flight task saved with ID: ${taskId}`);
      } catch (saveError: any) {
-         // Log the detailed original error before re-throwing
+        // Log the detailed original error before re-throwing
          console.error("Failed to save initial pending flight task (Original Error):", saveError);
-         // Re-throw with a more specific message, including the original one
-         throw new Error(`Failed to initiate flight booking task: ${saveError.message || 'Unknown Firestore save error'}`);
+        // Re-throw with a more specific message, including the original one
+         throw new Error(`Failed to initiate flight booking task: ${saveError.message || 'Could not save agent task to database.'}`);
      }
 
      // Helper function to update task status on failure
@@ -99,9 +101,12 @@ const findAndBookFlightsFlow = ai.defineFlow<
              try {
                  await updateAgentTask(taskId, { status: 'failed', error: errorMsg });
                  console.log(`Flight task ${taskId} updated to failed.`);
-             } catch (updateError) {
-                 console.error(`Failed to update task ${taskId} to failed status:`, updateError);
+             } catch (updateError: any) {
+                 // Log the secondary error but don't let it mask the original problem
+                 console.error(`Failed to update task ${taskId} to failed status after initial error:`, updateError);
              }
+         } else {
+            console.error("Cannot update task to failed: taskId is undefined.");
          }
      };
 
@@ -112,22 +117,26 @@ const findAndBookFlightsFlow = ai.defineFlow<
 
          if (!availableFlights || availableFlights.length === 0) {
             const noFlightsMsg = `No flights found matching your criteria from ${searchCriteria.departureCity} to ${searchCriteria.arrivalCity} on ${searchCriteria.departureDate}.`;
-            await updateTaskToFailed(noFlightsMsg);
+            await updateTaskToFailed(noFlightsMsg); // Update task before throwing
             throw new Error(noFlightsMsg);
          }
          console.log(`Found ${availableFlights.length} potential flights.`);
 
          // 3. Select a flight to book (simulate booking the first/cheapest result).
-         //    A real AI might consider price, duration, airline preference, etc.
-         const flightToBook = availableFlights.sort((a, b) => a.priceUSD - b.priceUSD)[0]; // Simple selection: cheapest
+         const flightToBook = availableFlights.sort((a, b) => a.priceUSD - b.priceUSD)[0];
          console.log(`Attempting to book flight: ${flightToBook.flightNumber} (${flightToBook.airline})`);
 
          // Update task details with chosen flight before booking attempt
          if (taskId) {
-             await updateAgentTask(taskId, {
-                 details: { ...searchCriteria, chosenFlight: flightToBook },
-                 status: 'processing' // Indicate booking attempt
-             });
+              try {
+                await updateAgentTask(taskId, {
+                    details: { ...searchCriteria, chosenFlight: flightToBook },
+                    status: 'processing' // Indicate booking attempt
+                });
+              } catch (updateError: any) {
+                 console.warn(`Failed to update task ${taskId} to processing status:`, updateError);
+                 // Continue with booking attempt even if status update failed, but log warning
+              }
          }
 
          // 4. Call the simulated booking service.
@@ -135,9 +144,10 @@ const findAndBookFlightsFlow = ai.defineFlow<
 
          // 5. Handle booking result.
          if (!bookingResult.success || !bookingResult.confirmationNumber) {
-             console.error(`Simulated flight booking failed for ${flightToBook.flightNumber}: ${bookingResult.message}`);
-             await updateTaskToFailed(bookingResult.message);
-             throw new Error(bookingResult.message); // Throw error to frontend
+             const bookingFailedMsg = bookingResult.message || `Simulated booking failed for ${flightToBook.flightNumber}.`;
+             console.error(`Simulated flight booking failed: ${bookingFailedMsg}`);
+             await updateTaskToFailed(bookingFailedMsg); // Update task before throwing
+             throw new Error(bookingFailedMsg); // Throw error to frontend
          }
 
          // 6. Booking successful - Update task in Firestore to 'confirmed'.
@@ -147,13 +157,19 @@ const findAndBookFlightsFlow = ai.defineFlow<
              confirmationNumber: bookingResult.confirmationNumber,
          };
          if (taskId) {
-             await updateAgentTask(taskId, {
-                 status: 'confirmed',
-                 details: finalDetails,
-                 result: { confirmationNumber: bookingResult.confirmationNumber, message: bookingResult.message },
-                 error: null, // Clear any previous error
-             });
-             console.log(`Flight task ${taskId} updated to confirmed.`);
+             try {
+                 await updateAgentTask(taskId, {
+                     status: 'confirmed',
+                     details: finalDetails,
+                     result: { confirmationNumber: bookingResult.confirmationNumber, message: bookingResult.message },
+                     error: null, // Clear any previous error
+                 });
+                 console.log(`Flight task ${taskId} updated to confirmed.`);
+             } catch (updateError: any) {
+                  console.error(`Failed to update task ${taskId} to confirmed status:`, updateError);
+                 // Decide if this failure is critical or just log it
+                 // For now, let the flow succeed but log the error
+             }
          }
 
          // 7. Return the successful result to the frontend.
@@ -168,11 +184,15 @@ const findAndBookFlightsFlow = ai.defineFlow<
      } catch (error: any) {
          console.error("Error in findAndBookFlightsFlow:", error);
          // Ensure the task is marked as failed if an error occurred after initial save
-         if (initialTaskSaved) {
-             await updateTaskToFailed(error.message || 'An unexpected error occurred during flight booking.');
+         // but before the final update (e.g., during findFlights or bookFlight simulation)
+         if (initialTaskSaved && taskId) { // Only update if task was initially saved
+            // Avoid overwriting a potential "confirmed" status update failure message
+            // Check current task status if possible before force-updating to failed (more complex)
+            await updateTaskToFailed(error.message || 'An unexpected error occurred during flight booking.');
          }
          // Re-throw the error to be caught by the frontend caller
          throw error; // Throw the original error object
      }
   }
 );
+

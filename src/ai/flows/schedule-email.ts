@@ -1,3 +1,4 @@
+
 'use server';
 /**
  * @fileOverview AI agent to send an email based on structured form input.
@@ -12,7 +13,7 @@
 import { ai } from '@/ai/ai-instance';
 import { z } from 'genkit';
 import { sendEmailTool } from '@/ai/tools/send-email'; // Import the send email tool
-import { saveAgentTask } from '@/services/firestore'; // Import Firestore service
+import { saveAgentTask, AgentTaskPayload } from '@/services/firestore'; // Import Firestore service
 
 // Define the structured input schema based on the form fields
 const ScheduleEmailInputSchema = z.object({
@@ -75,6 +76,10 @@ const scheduleEmailFlow = ai.defineFlow<
         // bodySnippet: emailDetails.body.substring(0, 100) + '...',
     };
 
+    let taskStatus: AgentTaskPayload['status'] = 'pending'; // Start as pending
+    let taskResult: Record<string, any> | null = null;
+    let taskError: string | null = null;
+
     try {
       // Input is already validated by the calling function
 
@@ -86,74 +91,87 @@ const scheduleEmailFlow = ai.defineFlow<
 
       // 2. Construct the final output based on the tool's result
       if (toolOutput.success) {
+         taskStatus = 'sent'; // Use 'sent' as success status
+         taskResult = { messageId: toolOutput.messageId };
+         taskError = null;
          finalResult = {
              success: true,
              details: `Email successfully sent to ${validatedInput.to}. Subject: "${validatedInput.subject}"`,
              messageId: toolOutput.messageId,
          };
-         // Save successful task
-         taskId = await saveAgentTask({
-             userId: userId,
-             type: 'email',
-             details: taskDetailsToSave, // Save the prepared details
-             status: 'sent', // Use 'sent' or 'completed'
-             result: { messageId: toolOutput.messageId },
-             error: null, // Ensure error is null on success
-         });
-         finalResult.taskId = taskId;
+         console.log('Email tool execution successful.');
       } else {
           // If the tool itself reports failure (e.g., simulated error)
-          const toolFailureMsg = toolOutput.details || 'Failed to send email via the tool.';
-           taskId = await saveAgentTask({
-               userId: userId,
-               type: 'email',
-               details: taskDetailsToSave,
-               status: 'failed',
-               error: toolFailureMsg,
-               result: null, // Ensure result is null on failure
-           });
+          taskStatus = 'failed';
+          taskError = toolOutput.details || 'Failed to send email via the tool.';
+          taskResult = null;
            finalResult = {
                success: false,
-               details: toolFailureMsg,
+               details: taskError,
                messageId: undefined,
-               taskId: taskId,
            };
-           // Do not throw here if you want to return the failed state gracefully
-           // throw new Error(toolFailureMsg);
+           console.error('Email tool execution failed:', taskError);
+           // Do not throw here, let the task be saved as failed
       }
-       return finalResult;
+
+      // 3. Save the task details to Firestore regardless of tool success/failure
+       try {
+           const taskToSave: Omit<AgentTaskPayload, 'createdAt' | 'updatedAt'> = {
+               userId: userId,
+               type: 'email',
+               details: taskDetailsToSave, // Save the prepared details
+               status: taskStatus,
+               result: taskResult,
+               error: taskError,
+           };
+           taskId = await saveAgentTask(taskToSave);
+           finalResult.taskId = taskId; // Add taskId to the result
+           console.log(`Email task saved with ID: ${taskId} and status: ${taskStatus}`);
+       } catch (saveError: any) {
+           // Log the detailed original save error
+           console.error("Failed to save email task to Firestore (Original Error):", saveError);
+           // Modify the final result message to indicate saving failed, but don't throw
+           finalResult.details += ` (Warning: Failed to save task status to database: ${saveError.message})`;
+           finalResult.taskId = undefined; // Ensure taskId is not set if saving failed
+           // Do not rethrow here to allow the flow to return the (partial) result
+       }
+
+       return finalResult; // Return the result, possibly with a warning about saving
 
     } catch (error: any) {
-      // This catch block handles errors *during* the flow execution
-      // (e.g., validation errors, tool execution errors not caught above, Firestore errors)
-      console.error('Error in scheduleEmailFlow:', error);
-      let errorMessage = 'An unexpected error occurred during email sending.';
+      // This catch block handles errors *during* the flow execution itself
+      // (e.g., tool input validation errors, unexpected tool execution errors)
+      console.error('Critical error in scheduleEmailFlow before task saving:', error);
+      let errorMessage = 'An unexpected error occurred during email processing.';
       if (error instanceof z.ZodError) { // Error during tool input validation
         errorMessage = `Invalid data format for email tool: ${error.errors.map(e => e.message).join(', ')}`;
       } else if (error.message) {
-        errorMessage = error.message; // Capture tool execution error or Firestore error
+        errorMessage = error.message; // Capture tool execution error etc.
       }
 
-       // Attempt to save failed task, *only if* it wasn't already saved as failed above
-       if (taskId === undefined) { // Check if taskId is still undefined
-         try {
-             taskId = await saveAgentTask({
-                 userId: userId,
-                 type: 'email',
-                 details: taskDetailsToSave, // Save the intended details
-                 status: 'failed',
-                 error: errorMessage,
-                 result: null,
-             });
-         } catch (saveError: any) {
-            // Log the detailed original save error before re-throwing
-             console.error("Failed to save error task to Firestore (Original Error):", saveError);
-             errorMessage = `${errorMessage}. Additionally, failed to save error status: ${saveError.message}`;
-         }
+       // Attempt to save a failed task record *if* the error happened before the main save block
+       try {
+           const failedTaskPayload: Omit<AgentTaskPayload, 'createdAt' | 'updatedAt'> = {
+               userId: userId,
+               type: 'email',
+               details: taskDetailsToSave, // Save the intended details
+               status: 'failed',
+               error: errorMessage,
+               result: null,
+           };
+           taskId = await saveAgentTask(failedTaskPayload);
+           console.log(`Saved failed email task record with ID: ${taskId}`);
+           // Modify the error message slightly to indicate the task was at least recorded as failed
+           errorMessage += ` (Task recorded as failed with ID: ${taskId})`;
+       } catch (saveError: any) {
+            // Log the critical save error
+            console.error("CRITICAL: Failed to save even the error task to Firestore:", saveError);
+            errorMessage += ` CRITICAL: Failed to save error status to Firestore: ${saveError.message}`;
        }
 
-       // Throw the error to be caught by the frontend
+       // Throw the original or augmented error message to be caught by the frontend
        throw new Error(errorMessage);
     }
   }
 );
+
